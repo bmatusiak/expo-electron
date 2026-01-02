@@ -22,7 +22,9 @@ function findProjectRoot() {
             } catch (e) { /* ignore parse errors */ }
         }
     }
-    // fallback: two levels up (common when installed in node_modules)
+    // FALLBACK: two levels up (common when installed in node_modules)
+    // If the package root isn't found within the upward walk, fall back
+    // to a conservative two-levels-up default.
     return path.resolve(__dirname, '..', '..');
 }
 
@@ -95,6 +97,8 @@ async function start() {
     const expoProc = spawnExpoWeb();
 
     // Wait for one of the likely web endpoints to be ready (check in parallel).
+    // FALLBACK/DEV-CONVENIENCE: probe multiple known dev endpoints and use
+    // whichever responds first. This is intended for development only.
     const candidates = Array.from(new Set([process.env.EXPO_WEB_URL || DEV_URL, 'http://localhost:8081', 'http://localhost:19006']));
     let resolvedUrl = null;
     try {
@@ -109,6 +113,8 @@ async function start() {
     console.log('Detected Expo web URL:', resolvedUrl);
 
     // Prefer a project-level `electron/` (created by `expo-electron prebuild`).
+    // FALLBACK: if a project-level `electron/` is not present, use the
+    // packaged template from this package. This allows editable prebuilds.
     const projectElectron = path.join(PROJECT_ROOT, 'electron');
     const cwd = fs.existsSync(projectElectron) ? projectElectron : path.join(__dirname);
     console.log('Using Electron working directory:', cwd);
@@ -189,6 +195,8 @@ function copyRecursive(src, dest) {
 
 // Recursive copy that SKIPS existing destination files and logs a warning;
 // useful for prebuild and packaging where we must not overwrite developer edits.
+// FALLBACK/PROTECT: this intentionally avoids overwriting existing files
+// created by a developer; existing files are preserved and skipped.
 function copyRecursiveSkipExisting(src, dest) {
     const stat = fs.statSync(src);
     if (stat.isDirectory()) {
@@ -227,6 +235,27 @@ function copyRecursiveSkipExisting(src, dest) {
     }
 }
 
+// Check for an executable in PATH using Node APIs only (cross-platform).
+function commandExistsInPath(cmd) {
+    const PATH = process.env.PATH || '';
+    const parts = PATH.split(path.delimiter).filter(Boolean);
+    if (process.platform === 'win32') {
+        const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';');
+        for (const dir of parts) {
+            for (const ext of pathext) {
+                const candidate = path.join(dir, cmd + ext);
+                try { if (fs.existsSync(candidate)) return true; } catch (e) { }
+            }
+        }
+        return false;
+    }
+    for (const dir of parts) {
+        const candidate = path.join(dir, cmd);
+        try { fs.accessSync(candidate, fs.constants.X_OK); return true; } catch (e) { }
+    }
+    return false;
+}
+
 function prebuild() {
     const target = path.join(PROJECT_ROOT, 'electron');
     const srcMain = path.join(__dirname, 'main');
@@ -236,6 +265,7 @@ function prebuild() {
         console.log('Prebuild: creating', target);
         fs.mkdirSync(target, { recursive: true });
     } else {
+        // FALLBACK/PROTECT: target already exists — do not overwrite files.
         console.log('Prebuild: target already exists at', target, '- will not overwrite existing files.');
     }
 
@@ -303,12 +333,13 @@ async function pack() {
             if (typeof fs.rmSync === 'function') {
                 fs.rmSync(appOut, { recursive: true, force: true });
             } else {
-                // Fallback for older Node: rmdirSync recursive
+                // rmdirSync recursive for older Node
                 fs.rmdirSync(appOut, { recursive: true });
             }
         } catch (e) {
-            console.warn('Failed to remove existing build workspace via fs; attempting shell rm -rf', e && e.message);
-            try { require('child_process').spawnSync('rm', ['-rf', appOut]); } catch (er) { /* ignore */ }
+            console.error('Failed to remove existing build workspace at', appOut + ':', e && e.message);
+            console.error('Per no-fallback policy this tool will not attempt alternative removal; please remove the folder manually and re-run packaging.');
+            process.exit(1);
         }
     }
     // recreate empty packaging workspace
@@ -337,7 +368,10 @@ async function pack() {
             console.error('Expo export failed:', e && e.message);
             process.exit(4);
         }
-        // Ensure index.html uses relative asset paths when opened via file://
+        // FALLBACK/ADAPT: Ensure index.html uses relative asset paths when opened via file://
+        // This transforms export output so the packaged app can load static
+        // assets from file:// locations. It's a deterministic post-export
+        // transformation to adapt web export output for packaging.
         try {
             const indexPath = path.join(webOut, 'index.html');
             if (fs.existsSync(indexPath)) {
@@ -419,22 +453,24 @@ async function pack() {
             workPkg.config = { forge: templateCfgForge };
         }
 
-        // If rpmbuild is missing, remove rpm makers from the config so make won't fail
+        // FALLBACK: If rpmbuild is not available on the host PATH, remove
+        // any RPM maker entries from the Forge config so `electron-forge` does
+        // not attempt an RPM build that would fail. This keeps packaging
+        // functional on systems without rpmbuild.
         const makers = (((workPkg || {}).config || {}).forge || {}).makers || [];
         const hasRpm = makers.some((m) => {
             const n = (m && m.name) || (typeof m === 'string' ? m : '');
             return String(n).toLowerCase().includes('rpm');
         });
         if (hasRpm) {
-            const which = require('child_process').spawnSync('which', ['rpmbuild']);
-            if (which.status !== 0) {
+            if (!commandExistsInPath('rpmbuild')) {
                 workPkg.config = workPkg.config || {};
                 workPkg.config.forge = workPkg.config.forge || {};
                 workPkg.config.forge.makers = makers.filter((m) => {
                     const n = (m && m.name) || (typeof m === 'string' ? m : '');
                     return !String(n).toLowerCase().includes('rpm');
                 });
-                console.log('rpmbuild not found; removed rpm maker from workspace package.json');
+                console.log('rpmbuild not found in PATH; removed rpm maker from workspace package.json');
             }
         }
 
