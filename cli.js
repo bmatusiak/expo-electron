@@ -198,6 +198,16 @@ function prebuild() {
     const srcMain = path.join(__dirname, 'main');
     const tgtMain = path.join(target, 'main');
     copyRecursive(srcMain, tgtMain);
+    // Add a .gitignore in the prebuild folder to avoid checking in build outputs
+    try {
+        const gi = path.join(target, '.gitignore');
+        if (!fs.existsSync(gi)) {
+            fs.writeFileSync(gi, '.build\n');
+            console.log('Prebuild: wrote', gi);
+        }
+    } catch (e) {
+        console.error('Prebuild: failed to write .gitignore', e && e.message);
+    }
     console.log('Prebuild: copied template main to', tgtMain);
     console.log('Prebuild: done. You can now edit the electron files at', target);
 }
@@ -233,10 +243,29 @@ async function pack() {
         process.exit(2);
     }
 
-    // Build web into the project's prebuild `electron/app` folder so packaging
-    // uses the editable prebuilt electron folder.
-    const appOut = path.join(target, 'app');
-    if (!fs.existsSync(appOut)) fs.mkdirSync(appOut, { recursive: true });
+    // Build web into the project's prebuild `electron/.build` folder so
+    // packaging uses the editable prebuilt electron folder but keeps the
+    // static build separate from editable sources.
+    const appOut = path.join(target, '.build');
+    if (fs.existsSync(appOut)) {
+        console.log('Cleaning existing build at', appOut);
+        const rmrf = (p) => {
+            if (!fs.existsSync(p)) return;
+            for (const entry of fs.readdirSync(p)) {
+                const ePath = path.join(p, entry);
+                try {
+                    const st = fs.lstatSync(ePath);
+                    if (st.isDirectory()) rmrf(ePath); else fs.unlinkSync(ePath);
+                } catch (err) {
+                    // best-effort: report and continue
+                    console.error('Failed to remove', ePath, err && err.message);
+                }
+            }
+            try { fs.rmdirSync(p); } catch (err) { /* ignore */ }
+        };
+        rmrf(appOut);
+    }
+    fs.mkdirSync(appOut, { recursive: true });
     console.log('Packaging: building Expo web into', appOut);
     // Deterministic behavior: detect whether the installed Expo CLI supports
     // the `export` command and run exactly that form. Do NOT attempt multiple
@@ -263,77 +292,80 @@ async function pack() {
         process.exit(4);
     }
 
-    // Run electron-forge make from the package folder so its package.json is used
-    console.log('Packaging: running electron-forge make');
-    // If the package.json config requests an rpm maker but the system lacks
-    // `rpmbuild`, temporarily remove the rpm maker so make can continue.
-    const pkgPath = path.join(__dirname, 'package.json');
+    // Run electron-forge make from a temporary packaging workspace inside the
+    // project's `electron/.build` directory so all outputs live under that
+    // folder. Create a minimal packaging workspace there and run `make`.
+    console.log('Packaging: running electron-forge make in packaging workspace');
+    const originalPkgPath = path.join(__dirname, 'package.json');
     let originalPkg = null;
-    let wroteTempPkg = false;
+    const workPkgPath = path.join(appOut, 'package.json');
     try {
-        if (fs.existsSync(pkgPath)) {
-            originalPkg = fs.readFileSync(pkgPath, 'utf8');
-            let pkgJson = JSON.parse(originalPkg);
-            const makers = (((pkgJson || {}).config || {}).forge || {}).makers || [];
+        if (!fs.existsSync(appOut)) fs.mkdirSync(appOut, { recursive: true });
+
+        // Copy electron main files into the workspace so packaging is self-contained
+        const projectMain = path.join(target, 'main');
+        const workMain = path.join(appOut, 'main');
+        if (fs.existsSync(workMain)) {
+            // remove existing workMain to ensure fresh copy
+            const rmrf = (p) => {
+                if (!fs.existsSync(p)) return;
+                for (const entry of fs.readdirSync(p)) {
+                    const ePath = path.join(p, entry);
+                    if (fs.lstatSync(ePath).isDirectory()) rmrf(ePath); else fs.unlinkSync(ePath);
+                }
+                fs.rmdirSync(p);
+            };
+            rmrf(workMain);
+        }
+        if (fs.existsSync(projectMain)) copyRecursive(projectMain, workMain);
+
+        // Read original package.json from the package and adapt it for the
+        // packaging workspace.
+        if (fs.existsSync(originalPkgPath)) {
+            originalPkg = fs.readFileSync(originalPkgPath, 'utf8');
+            const pkgJson = JSON.parse(originalPkg);
+            // Create a workspace-specific package.json that points main to
+            // the copied main entry inside the workspace.
+            const workPkg = Object.assign({}, pkgJson);
+            workPkg.name = workPkg.name || (pkgJson.productName || 'expo-electron-workspace');
+            workPkg.main = 'main/main.js';
+            // Ensure description exists for deb maker
+            if (!workPkg.description && !workPkg.productDescription) workPkg.description = workPkg.productName || workPkg.name || 'Expo Electron App';
+
+            // If rpmbuild is missing, remove rpm makers from the copy so make
+            // doesn't fail (we avoid modifying the package's package.json).
+            const makers = (((workPkg || {}).config || {}).forge || {}).makers || [];
             const hasRpm = makers.some((m) => {
                 const n = (m && m.name) || (typeof m === 'string' ? m : '');
                 return String(n).toLowerCase().includes('rpm');
             });
-            const hasDeb = makers.some((m) => {
-                const n = (m && m.name) || (typeof m === 'string' ? m : '');
-                return String(n).toLowerCase().includes('deb');
-            });
-            let modified = false;
-            // If rpm maker exists but rpmbuild is unavailable, remove rpm maker.
             if (hasRpm) {
                 const which = require('child_process').spawnSync('which', ['rpmbuild']);
                 if (which.status !== 0) {
-                    console.log('rpmbuild not found; removing rpm maker from package.json temporarily');
-                    // Filter out rpm makers
-                    const newMakers = makers.filter((m) => {
+                    workPkg.config = workPkg.config || {};
+                    workPkg.config.forge = workPkg.config.forge || {};
+                    workPkg.config.forge.makers = makers.filter((m) => {
                         const n = (m && m.name) || (typeof m === 'string' ? m : '');
                         return !String(n).toLowerCase().includes('rpm');
                     });
-                    if (!pkgJson.config) pkgJson.config = {};
-                    if (!pkgJson.config.forge) pkgJson.config.forge = {};
-                    pkgJson.config.forge.makers = newMakers;
-                    modified = true;
+                    console.log('rpmbuild not found; removed rpm maker from workspace package.json');
                 }
             }
-            // If deb maker exists but no description/productDescription provided,
-            // add a temporary description so electron-installer-debian won't fail.
-            if (hasDeb) {
-                if (!pkgJson.description && !pkgJson.productDescription) {
-                    pkgJson.description = pkgJson.productName || pkgJson.name || 'Expo Electron App';
-                    console.log('Setting temporary package.json description to', pkgJson.description);
-                    modified = true;
-                }
-            }
-            // Ensure package.json has a valid `main` entry pointing to our
-            // electron entry point; electron-forge requires this.
-            if (!pkgJson.main || !fs.existsSync(path.join(__dirname, pkgJson.main))) {
-                pkgJson.main = 'main/main.js';
-                console.log('Setting temporary package.json main to', pkgJson.main);
-                modified = true;
-            }
-            if (modified) {
-                fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2), 'utf8');
-                wroteTempPkg = true;
-            }
+
+            fs.writeFileSync(workPkgPath, JSON.stringify(workPkg, null, 2), 'utf8');
         }
 
-        await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: __dirname });
+        // Run electron-forge make with cwd set to the workspace so outputs are
+        // placed under appOut/out/make
+        await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: appOut });
     } catch (e) {
         console.error('electron-forge make failed:', e && e.message);
-        if (wroteTempPkg && originalPkg !== null) {
-            try { fs.writeFileSync(pkgPath, originalPkg, 'utf8'); } catch (_) { }
-        }
+        // cleanup workspace package.json if we created one
+        try { if (fs.existsSync(workPkgPath)) fs.unlinkSync(workPkgPath); } catch (_) { }
         process.exit(5);
     }
-    // Restore original package.json if we modified it
-    if (wroteTempPkg && originalPkg !== null) {
-        try { fs.writeFileSync(pkgPath, originalPkg, 'utf8'); } catch (err) { console.error('Failed to restore package.json:', err && err.message); }
-    }
+    // cleanup workspace package.json (leave workMain and outputs intact)
+    try { if (fs.existsSync(workPkgPath)) fs.unlinkSync(workPkgPath); } catch (err) { console.error('Failed to remove workspace package.json:', err && err.message); }
     console.log('Packaging: complete — check the out/ folder under', __dirname);
 }
 
