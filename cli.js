@@ -69,7 +69,7 @@ function spawnExpoWeb() {
         process.exit(2);
     }
     console.log('Starting Expo (web) via', EXPO_CMD, 'start --web');
-    const child = spawn(EXPO_CMD, ['start', '--web'], { stdio: 'inherit', env });
+    const child = spawn(EXPO_CMD, ['start', '--web'], { stdio: 'inherit', env, cwd: PROJECT_ROOT });
     child.on('error', (err) => console.error('Expo process error:', err && err.message));
     return child;
 }
@@ -87,7 +87,9 @@ function spawnElectron(cwd, resolvedUrl) {
         process.exit(2);
     }
     console.log('Starting Electron via', ELECTRON_CMD, electronEntry);
-    const child = spawn(ELECTRON_CMD, [electronEntry], { stdio: 'inherit', cwd, env });
+    // Give Electron an ignored stdin so it does not steal terminal input from
+    // the Expo process. Keep stdout/stderr inherited so logs still appear.
+    const child = spawn(ELECTRON_CMD, [electronEntry], { stdio: ['ignore', 'inherit', 'inherit'], cwd, env });
     child.on('error', (err) => console.error('Electron process error:', err && err.message));
     return child;
 }
