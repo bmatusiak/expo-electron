@@ -265,11 +265,74 @@ async function pack() {
 
     // Run electron-forge make from the package folder so its package.json is used
     console.log('Packaging: running electron-forge make');
+    // If the package.json config requests an rpm maker but the system lacks
+    // `rpmbuild`, temporarily remove the rpm maker so make can continue.
+    const pkgPath = path.join(__dirname, 'package.json');
+    let originalPkg = null;
+    let wroteTempPkg = false;
     try {
+        if (fs.existsSync(pkgPath)) {
+            originalPkg = fs.readFileSync(pkgPath, 'utf8');
+            let pkgJson = JSON.parse(originalPkg);
+            const makers = (((pkgJson || {}).config || {}).forge || {}).makers || [];
+            const hasRpm = makers.some((m) => {
+                const n = (m && m.name) || (typeof m === 'string' ? m : '');
+                return String(n).toLowerCase().includes('rpm');
+            });
+            const hasDeb = makers.some((m) => {
+                const n = (m && m.name) || (typeof m === 'string' ? m : '');
+                return String(n).toLowerCase().includes('deb');
+            });
+            let modified = false;
+            // If rpm maker exists but rpmbuild is unavailable, remove rpm maker.
+            if (hasRpm) {
+                const which = require('child_process').spawnSync('which', ['rpmbuild']);
+                if (which.status !== 0) {
+                    console.log('rpmbuild not found; removing rpm maker from package.json temporarily');
+                    // Filter out rpm makers
+                    const newMakers = makers.filter((m) => {
+                        const n = (m && m.name) || (typeof m === 'string' ? m : '');
+                        return !String(n).toLowerCase().includes('rpm');
+                    });
+                    if (!pkgJson.config) pkgJson.config = {};
+                    if (!pkgJson.config.forge) pkgJson.config.forge = {};
+                    pkgJson.config.forge.makers = newMakers;
+                    modified = true;
+                }
+            }
+            // If deb maker exists but no description/productDescription provided,
+            // add a temporary description so electron-installer-debian won't fail.
+            if (hasDeb) {
+                if (!pkgJson.description && !pkgJson.productDescription) {
+                    pkgJson.description = pkgJson.productName || pkgJson.name || 'Expo Electron App';
+                    console.log('Setting temporary package.json description to', pkgJson.description);
+                    modified = true;
+                }
+            }
+            // Ensure package.json has a valid `main` entry pointing to our
+            // electron entry point; electron-forge requires this.
+            if (!pkgJson.main || !fs.existsSync(path.join(__dirname, pkgJson.main))) {
+                pkgJson.main = 'main/main.js';
+                console.log('Setting temporary package.json main to', pkgJson.main);
+                modified = true;
+            }
+            if (modified) {
+                fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2), 'utf8');
+                wroteTempPkg = true;
+            }
+        }
+
         await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: __dirname });
     } catch (e) {
         console.error('electron-forge make failed:', e && e.message);
+        if (wroteTempPkg && originalPkg !== null) {
+            try { fs.writeFileSync(pkgPath, originalPkg, 'utf8'); } catch (_) { }
+        }
         process.exit(5);
+    }
+    // Restore original package.json if we modified it
+    if (wroteTempPkg && originalPkg !== null) {
+        try { fs.writeFileSync(pkgPath, originalPkg, 'utf8'); } catch (err) { console.error('Failed to restore package.json:', err && err.message); }
     }
     console.log('Packaging: complete — check the out/ folder under', __dirname);
 }
