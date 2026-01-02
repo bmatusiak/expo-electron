@@ -252,7 +252,10 @@ async function pack() {
     } else {
         fs.mkdirSync(appOut, { recursive: true });
     }
-    console.log('Packaging: building Expo web into', appOut);
+    // Export web into an `app` subdirectory so packaged apps will find
+    // `app/index.html` under the ASAR resources (expected by main.js).
+    const webOut = path.join(appOut, 'app');
+    console.log('Packaging: building Expo web into', webOut);
     // Deterministic behavior: detect whether the installed Expo CLI supports
     // the `export` command and run exactly that form. Do NOT attempt multiple
     // fallbacks — fail loudly if the expected command is not available.
@@ -263,13 +266,38 @@ async function pack() {
     }
     const helpOut = String(helpCheck.stdout || '') + String(helpCheck.stderr || '');
     if (helpOut.includes('export')) {
-        const args = ['export', '.', '--output-dir', appOut, '-p', 'web'];
+        const args = ['export', '.', '--output-dir', webOut, '-p', 'web'];
         console.log('Running:', EXPO_CMD, args.join(' '));
         try {
+            // Ensure output dir exists
+            if (!fs.existsSync(webOut)) fs.mkdirSync(webOut, { recursive: true });
             await runCommand(EXPO_CMD, args, { cwd: PROJECT_ROOT });
         } catch (e) {
             console.error('Expo export failed:', e && e.message);
             process.exit(4);
+        }
+        // Ensure index.html uses relative asset paths when opened via file://
+        try {
+            const indexPath = path.join(webOut, 'index.html');
+            if (fs.existsSync(indexPath)) {
+                let html = fs.readFileSync(indexPath, 'utf8');
+                // Inject a base href if missing
+                if (!/\<base[^>]*href=/.test(html)) {
+                    const headIndex = html.indexOf('<head>');
+                    if (headIndex !== -1) {
+                        const insertAt = headIndex + '<head>'.length;
+                        html = html.slice(0, insertAt) + '\n  <base href="./">' + html.slice(insertAt);
+                    }
+                }
+                // Convert root-absolute asset references like src="/_expo/..." or href="/static/..."
+                // to relative references so file:// loads work. Only targets attribute patterns
+                // to avoid touching protocol URLs.
+                html = html.replace(/(\b(?:src|href)\s*=\s*['"])\//gi, '$1./');
+                fs.writeFileSync(indexPath, html, 'utf8');
+                console.log('Post-export: fixed asset paths and ensured base href in', indexPath);
+            }
+        } catch (e) {
+            console.warn('Post-export: failed to adjust index.html for file:// usage:', e && e.message);
         }
     } else {
         console.error('Installed expo CLI does not advertise an `export` command.');

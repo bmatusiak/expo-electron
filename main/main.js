@@ -18,12 +18,25 @@ function createWindow() {
         },
     });
 
-    var ok;
+    // Prefer a running dev server during development. In production require
+    // the local built `index.html` so production builds never try to reach Metro.
+    const isDev = process.env.NODE_ENV === 'development';
+    const expoUrl = process.env.EXPO_WEB_URL || DEV_URL;
 
-    if (process.env.NODE_ENV === 'development') {
-        mainWindow.loadURL(DEV_URL).catch(() => { });
+    if (isDev && process.env.EXPO_WEB_URL) {
+        mainWindow.loadURL(expoUrl).catch((err) => {
+            console.error('Failed to load dev URL', expoUrl, err);
+            app.exit(1);
+        });
     } else {
-        mainWindow.loadFile(PROD_INDEX).catch(() => { });
+        if (!fs.existsSync(PROD_INDEX)) {
+            console.error('Production index not found at', PROD_INDEX);
+            app.exit(1);
+        }
+        mainWindow.loadFile(PROD_INDEX).catch((err) => {
+            console.error('Failed to load production index', PROD_INDEX, err);
+            app.exit(1);
+        });
     }
 }
 
