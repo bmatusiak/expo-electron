@@ -108,8 +108,10 @@ async function start() {
 
     console.log('Detected Expo web URL:', resolvedUrl);
 
-    // Launch electron pointing at the local expo-electron folder
-    const cwd = path.join(__dirname);
+    // Prefer a project-level `electron/` (created by `expo-electron prebuild`).
+    const projectElectron = path.join(PROJECT_ROOT, 'electron');
+    const cwd = fs.existsSync(projectElectron) ? projectElectron : path.join(__dirname);
+    console.log('Using Electron working directory:', cwd);
     // pass detected URL to electron env
     process.env.EXPO_WEB_URL = resolvedUrl;
     const electronProc = spawnElectron(cwd, resolvedUrl);
