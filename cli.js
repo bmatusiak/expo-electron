@@ -187,28 +187,76 @@ function copyRecursive(src, dest) {
     }
 }
 
+// Recursive copy that SKIPS existing destination files and logs a warning;
+// useful for prebuild and packaging where we must not overwrite developer edits.
+function copyRecursiveSkipExisting(src, dest) {
+    const stat = fs.statSync(src);
+    if (stat.isDirectory()) {
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        for (const entry of fs.readdirSync(src)) {
+            const s = path.join(src, entry);
+            const d = path.join(dest, entry);
+            if (fs.existsSync(d)) {
+                // If destination exists and is a directory, recurse into it to
+                // skip any existing children but copy missing ones. If it's a
+                // file, skip and warn (do not overwrite).
+                const dstStat = fs.statSync(d);
+                const srcStat = fs.statSync(s);
+                if (dstStat.isDirectory() && srcStat.isDirectory()) {
+                    copyRecursiveSkipExisting(s, d);
+                } else {
+                    console.log('Prebuild: skipping existing', d);
+                }
+            } else {
+                // Destination missing — perform a full copy
+                if (fs.statSync(s).isDirectory()) {
+                    copyRecursiveSkipExisting(s, d);
+                } else {
+                    fs.copyFileSync(s, d);
+                    console.log('Prebuild: copied', d);
+                }
+            }
+        }
+    } else if (stat.isFile()) {
+        if (fs.existsSync(dest)) {
+            console.log('Prebuild: skipping existing', dest);
+        } else {
+            fs.copyFileSync(src, dest);
+            console.log('Prebuild: copied', dest);
+        }
+    }
+}
+
 function prebuild() {
     const target = path.join(PROJECT_ROOT, 'electron');
-    if (fs.existsSync(target)) {
-        console.log('Prebuild: target already exists at', target);
-        process.exit(0);
-    }
-    console.log('Prebuild: creating', target);
-    fs.mkdirSync(target, { recursive: true });
     const srcMain = path.join(__dirname, 'main');
     const tgtMain = path.join(target, 'main');
-    copyRecursive(srcMain, tgtMain);
+
+    if (!fs.existsSync(target)) {
+        console.log('Prebuild: creating', target);
+        fs.mkdirSync(target, { recursive: true });
+    } else {
+        console.log('Prebuild: target already exists at', target, '- will not overwrite existing files.');
+    }
+
+    // Copy template main into target but DO NOT overwrite existing files.
+    if (fs.existsSync(srcMain)) {
+        copyRecursiveSkipExisting(srcMain, tgtMain);
+    } else {
+        console.warn('Prebuild: template main missing at', srcMain);
+    }
     // Add a .gitignore in the prebuild folder to avoid checking in build outputs
     try {
         const gi = path.join(target, '.gitignore');
         if (!fs.existsSync(gi)) {
             fs.writeFileSync(gi, '.build\n');
             console.log('Prebuild: wrote', gi);
+        } else {
+            console.log('Prebuild: .gitignore already exists; leaving in place');
         }
     } catch (e) {
         console.error('Prebuild: failed to write .gitignore', e && e.message);
     }
-    console.log('Prebuild: copied template main to', tgtMain);
     console.log('Prebuild: done. You can now edit the electron files at', target);
 }
 
@@ -223,13 +271,14 @@ function runCommand(cmdPath, args, options = {}) {
 async function pack() {
     // Ensure prebuild exists; if not, run prebuild to create it (deterministic).
     const target = path.join(PROJECT_ROOT, 'electron');
-    if (!fs.existsSync(target)) {
-        console.log('Package: project electron/ not found, running prebuild to generate it.');
+    // Always run prebuild step so users get warnings if files would be
+    // overwritten. prebuild itself will skip existing files rather than
+    // overwriting them.
+    try {
         prebuild();
-        if (!fs.existsSync(target)) {
-            console.error('Package: prebuild failed to create', target);
-            process.exit(3);
-        }
+    } catch (e) {
+        console.error('Package: prebuild failed:', e && e.message);
+        process.exit(3);
     }
 
     // Ensure binaries
@@ -319,10 +368,10 @@ async function pack() {
         // Copy electron main files into the workspace so packaging is self-contained
         const projectMain = path.join(target, 'main');
         const workMain = path.join(appOut, 'main');
-        // If the workspace already has a `main` folder, preserve it for inspection;
-        // otherwise copy the project's `main` into the workspace.
-        if (!fs.existsSync(workMain) && fs.existsSync(projectMain)) {
-            copyRecursive(projectMain, workMain);
+        // Copy into the workspace but SKIP existing files so developer edits
+        // are preserved and not clobbered.
+        if (fs.existsSync(projectMain)) {
+            copyRecursiveSkipExisting(projectMain, workMain);
         }
 
         // Read original package.json from the package and adapt it for the
@@ -395,7 +444,7 @@ async function pack() {
 if (require.main === module) {
     const cmd = process.argv[2] || 'start';
     if (cmd === 'start') start();
-    else if (cmd === 'prebuild') prebuild();
+    else if (cmd === 'prebuild') { prebuild(); process.exit(0); }
     else if (cmd === 'package') pack();
     else console.error('unknown command', cmd);
 }

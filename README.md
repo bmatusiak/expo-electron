@@ -1,32 +1,37 @@
 # expo-electron
 
-Dev & packaging helper for the Expo app in the parent folder.
+Dev & packaging helper for the Expo app in the parent folder. This README documents the current, deterministic workflow and recent fixes for production packaging.
 
-- `npm run dev` — start the Expo web server and Electron (dev)
-- `npm run build-web` — build Expo for web into `expo-electron/app` (for packaging)
-- `npm run package` — run `electron-forge package`
-- `npm run make` — create distributables via `electron-forge make`
+Quick commands (run from the project root):
 
-Notes:
-- This setup requires the local `expo` and `electron` binaries (install dependencies in the project root).
-- For packaging, run `npm run build-web` from this folder first so Electron will load the built `index.html`.
- - In this workspace `expo-electron` is referenced from the project root (see parent `package.json`). Running `npm install` at the project root will install the devDependencies for `expo-electron` automatically — you do not need to run `npm install` inside `expo-electron`.
+- **Install:** Run `npm install` in the project root so `expo`, `electron`, and `electron-forge` are available in `node_modules/.bin`.
+- **Prebuild (one-time):** `npx expo-electron prebuild` — copies the template `main/` into `<project>/electron` for editing.
+- **Dev:** `npx expo-electron start` — starts Expo web and launches Electron (dev mode).
+- **Package:** `npx expo-electron package` — builds the web app and runs `electron-forge make` to create distributables.
 
-Planned / Future workflow
--------------------------
-The following workflow is planned to make initial setup and packaging predictable and editable:
+What `package` does now (deterministic):
 
-- `prebuild`: `expo-electron` will act as a template package installed into `node_modules`.
-	- Running `npm run electron -- prebuild` (from the project root) will copy `node_modules/expo-electron/main` into `<project-root>/electron` when that folder does not exist.
-	- The generated `<project-root>/electron` is intended as a user-editable prebuild (main, preload, and packaging helpers) that developers can modify for their app.
-	- If the `<project-root>/electron` directory exists, the CLI will prefer it over the packaged template in `node_modules`.
+- Builds the Expo web export into: `electron/.build/app` (this is important — production `main.js` expects `app/index.html`).
+- After export the CLI adjusts `index.html` so it works with `file://` URLs:
+  - injects a `<base href="./">` if missing,
+  - rewrites root-absolute `src`/`href` attributes (e.g. `/_expo/...`) to relative paths (`./_expo/...`).
+- Creates a minimal packaging `package.json` inside `electron/.build` combining your project name/version and the template Forge config, and runs `electron-forge make` with cwd set to `electron/.build`.
+- If `rpmbuild` is not present on the machine, the tool removes any RPM maker from the Forge config so packaging does not fail unexpectedly.
+- The packaging workspace and outputs are preserved under `electron/.build` (artifacts at `electron/.build/out/make`) for inspection — nothing is deleted automatically.
 
-- `package`: `npm run electron -- package` will:
-	1. Build the Expo web assets into the prebuild `electron` folder (so the app bundles the static web build).
-	2. Run the Electron Forge packaging flow (Squirrel for Windows) from the project root to produce distributables.
+Production behaviour and troubleshooting
 
-Implementation notes:
-- No silent fallbacks: the CLI will fail loudly when required binaries are missing and will clearly instruct to run `npm install` at project root.
-- The prebuild copy is idempotent and only creates the editable `electron` folder when missing.
-- Scripts will prefer binaries installed at the workspace root (`node_modules/.bin`) so `npm install` in the root manages all packages.
+- The packaged Electron `main.js` will require `app/index.html` to be present inside the packaged resources. If it's missing the app will log an error and exit with a non-zero code. This prevents silent fallbacks to a dev server.
+- If you see errors like `GET file:///_expo/... net::ERR_FILE_NOT_FOUND` in the devtools console after packaging:
+  - Confirm `electron/.build/app/index.html` exists and contains a `<base href="./">` near the top.
+  - Confirm assets exist in `electron/.build/app/_expo` or the expected relative paths.
+  - Re-run packaging: `rm -rf electron && npx expo-electron package` to regenerate the build and packaging workspace.
+
+Notes and policy
+
+- Deterministic, no-fallback behavior: the CLI checks for required commands and fails loudly with clear instructions (do not expect it to guess alternate CLI forms).
+- The `electron` folder created by `prebuild` is intended to be edited by developers; if it exists the CLI will prefer it over the bundled template in `node_modules`.
+- This helper prefers binaries installed at the project root (`node_modules/.bin`). Run `npm install` at the root before using packaging or dev commands.
+
+If you want, I can add an explicit `--clean` option to remove `electron/.build` before packaging; otherwise the workspace is preserved for inspection.
 
