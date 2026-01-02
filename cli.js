@@ -4,6 +4,34 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
+// Determine project root: walk upwards until we find a package.json whose
+// `name` differs from this package (expo-electron). This allows the package
+// to be installed under `node_modules` or `sub_modules` during development.
+function findProjectRoot() {
+    const selfPkgPath = path.join(__dirname, 'package.json');
+    let selfName = null;
+    try { selfName = JSON.parse(fs.readFileSync(selfPkgPath, 'utf8')).name; } catch (e) { /* ignore */ }
+    let cur = path.resolve(__dirname);
+    for (let i = 0; i < 6; i++) {
+        cur = path.dirname(cur);
+        const p = path.join(cur, 'package.json');
+        if (fs.existsSync(p)) {
+            try {
+                const name = JSON.parse(fs.readFileSync(p, 'utf8')).name;
+                if (name && name !== selfName) return cur;
+            } catch (e) { /* ignore parse errors */ }
+        }
+    }
+    // fallback: two levels up (common when installed in node_modules)
+    return path.resolve(__dirname, '..', '..');
+}
+
+const PROJECT_ROOT = findProjectRoot();
+const ROOT_NODE_BIN = path.join(PROJECT_ROOT, 'node_modules', '.bin');
+
+const EXPO_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'expo.cmd' : 'expo');
+const ELECTRON_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'electron.cmd' : 'electron');
+
 const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:19006';
 const POLL_INTERVAL = 500;
 const TIMEOUT_MS = 120000;
@@ -34,14 +62,14 @@ function spawnExpoWeb() {
     delete env.CI;
     env.BROWSER = 'none';
 
-    // Require local expo binary; do not fall back to npx
-    const localExpo = path.join(__dirname, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'expo.cmd' : 'expo');
-    if (!fs.existsSync(localExpo)) {
-        console.error('Local expo binary not found at', localExpo, '\nPlease run `npm install` in the project root to install dependencies.');
-        process.exit(1);
+    if (!fs.existsSync(EXPO_CMD)) {
+        console.error('Missing expo binary. Run `npm install` at project root:', PROJECT_ROOT);
+        process.exit(2);
     }
-    console.log('Using local expo binary at', localExpo);
-    return spawn(localExpo, ['start', '--web'], { stdio: 'inherit', env });
+    console.log('Starting Expo (web) via', EXPO_CMD, 'start --web');
+    const child = spawn(EXPO_CMD, ['start', '--web'], { stdio: 'inherit', env });
+    child.on('error', (err) => console.error('Expo process error:', err && err.message));
+    return child;
 }
 
 function spawnElectron(cwd, resolvedUrl) {
@@ -52,17 +80,14 @@ function spawnElectron(cwd, resolvedUrl) {
         EXPO_PRELOAD_PATH: preloadPath,
     });
     const electronEntry = path.join(cwd, 'main', 'main.js');
-    // Require local electron binary; do not fall back to npx
-    const localElectron = path.join(cwd, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
-    if (!fs.existsSync(localElectron)) {
-        console.error('Local electron binary not found at', localElectron, '\nPlease run `npm install` in the project root to install dependencies.');
-        process.exit(1);
+    if (!fs.existsSync(ELECTRON_CMD)) {
+        console.error('Missing electron binary. Run `npm install` at project root:', PROJECT_ROOT);
+        process.exit(2);
     }
-    console.log('Using local electron binary at', localElectron);
-    const proc = spawn(localElectron, [electronEntry], { stdio: 'inherit', cwd, env });
-    proc.on('error', (err) => console.error('Electron process error:', err && err.message));
-    proc.on('exit', (code) => { if (code && code !== 0) process.exit(code); });
-    return proc;
+    console.log('Starting Electron via', ELECTRON_CMD, electronEntry);
+    const child = spawn(ELECTRON_CMD, [electronEntry], { stdio: 'inherit', cwd, env });
+    child.on('error', (err) => console.error('Electron process error:', err && err.message));
+    return child;
 }
 
 async function start() {
@@ -148,7 +173,86 @@ async function start() {
     process.on('SIGHUP', () => initiateShutdown(0));
 }
 
+function copyRecursive(src, dest) {
+    const stat = fs.statSync(src);
+    if (stat.isDirectory()) {
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        for (const entry of fs.readdirSync(src)) {
+            copyRecursive(path.join(src, entry), path.join(dest, entry));
+        }
+    } else if (stat.isFile()) {
+        fs.copyFileSync(src, dest);
+    }
+}
+
+function prebuild() {
+    const target = path.join(PROJECT_ROOT, 'electron');
+    if (fs.existsSync(target)) {
+        console.log('Prebuild: target already exists at', target);
+        process.exit(0);
+    }
+    console.log('Prebuild: creating', target);
+    fs.mkdirSync(target, { recursive: true });
+    const srcMain = path.join(__dirname, 'main');
+    const tgtMain = path.join(target, 'main');
+    copyRecursive(srcMain, tgtMain);
+    console.log('Prebuild: copied template main to', tgtMain);
+    console.log('Prebuild: done. You can now edit the electron files at', target);
+}
+
+function runCommand(cmdPath, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const p = spawn(cmdPath, args, Object.assign({ stdio: 'inherit' }, options));
+        p.on('error', (err) => reject(err));
+        p.on('exit', (code) => code === 0 ? resolve(0) : reject(new Error('exit ' + code)));
+    });
+}
+
+async function pack() {
+    // Ensure prebuild exists
+    const target = path.join(PROJECT_ROOT, 'electron');
+    if (!fs.existsSync(target)) {
+        console.error('Package: missing', target, '\nRun `expo-electron prebuild` first to create the electron template in your project.');
+        process.exit(3);
+    }
+
+    // Ensure binaries
+    const ELECTRON_FORGE_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'electron-forge.cmd' : 'electron-forge');
+    if (!fs.existsSync(EXPO_CMD)) {
+        console.error('Missing expo binary. Run `npm install` at project root:', PROJECT_ROOT);
+        process.exit(2);
+    }
+    if (!fs.existsSync(ELECTRON_FORGE_CMD)) {
+        console.error('Missing electron-forge binary. Run `npm install` at project root:', PROJECT_ROOT);
+        process.exit(2);
+    }
+
+    // Build web into this package's `app` folder
+    const appOut = path.join(__dirname, 'app');
+    if (!fs.existsSync(appOut)) fs.mkdirSync(appOut, { recursive: true });
+    console.log('Packaging: building Expo web into', appOut);
+    try {
+        await runCommand(EXPO_CMD, ['build', 'web', '--no-dev', '--output-dir', appOut], { cwd: PROJECT_ROOT });
+    } catch (e) {
+        console.error('Expo web build failed:', e && e.message);
+        process.exit(4);
+    }
+
+    // Run electron-forge make from the package folder so its package.json is used
+    console.log('Packaging: running electron-forge make');
+    try {
+        await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: __dirname });
+    } catch (e) {
+        console.error('electron-forge make failed:', e && e.message);
+        process.exit(5);
+    }
+    console.log('Packaging: complete — check the out/ folder under', __dirname);
+}
+
 if (require.main === module) {
     const cmd = process.argv[2] || 'start';
-    if (cmd === 'start') start(); else console.error('unknown command');
+    if (cmd === 'start') start();
+    else if (cmd === 'prebuild') prebuild();
+    else if (cmd === 'package') pack();
+    else console.error('unknown command', cmd);
 }
