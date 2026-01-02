@@ -366,7 +366,8 @@ async function pack() {
     }
     // cleanup workspace package.json (leave workMain and outputs intact)
     try { if (fs.existsSync(workPkgPath)) fs.unlinkSync(workPkgPath); } catch (err) { console.error('Failed to remove workspace package.json:', err && err.message); }
-    console.log('Packaging: complete — check the out/ folder under', __dirname);
+    const artifactsPath = path.join(appOut, 'out', 'make');
+    console.log('Packaging: complete — artifacts available at:', artifactsPath);
 }
 
 if (require.main === module) {
