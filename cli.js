@@ -89,7 +89,7 @@ function spawnElectron(cwd, resolvedUrl) {
     console.log('Starting Electron via', ELECTRON_CMD, electronEntry);
     // Give Electron an ignored stdin so it does not steal terminal input from
     // the Expo process. Keep stdout/stderr inherited so logs still appear.
-    const child = spawn(ELECTRON_CMD, [electronEntry], { stdio: ['ignore', 'inherit', 'inherit'], cwd, env });
+    const child = spawn(ELECTRON_CMD, [electronEntry, '--no-sandbox'], { stdio: ['ignore', 'inherit', 'inherit'], cwd, env });
     child.on('error', (err) => console.error('Electron process error:', err && err.message));
     return child;
 }
