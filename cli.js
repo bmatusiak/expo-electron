@@ -297,10 +297,22 @@ async function pack() {
     // static build separate from editable sources.
     const appOut = path.join(target, '.build');
     if (fs.existsSync(appOut)) {
-        console.log('Preserving existing build workspace at', appOut);
-    } else {
-        fs.mkdirSync(appOut, { recursive: true });
+        console.log('Removing existing build workspace at', appOut);
+        try {
+            // Node 14.14+ supports rmSync
+            if (typeof fs.rmSync === 'function') {
+                fs.rmSync(appOut, { recursive: true, force: true });
+            } else {
+                // Fallback for older Node: rmdirSync recursive
+                fs.rmdirSync(appOut, { recursive: true });
+            }
+        } catch (e) {
+            console.warn('Failed to remove existing build workspace via fs; attempting shell rm -rf', e && e.message);
+            try { require('child_process').spawnSync('rm', ['-rf', appOut]); } catch (er) { /* ignore */ }
+        }
     }
+    // recreate empty packaging workspace
+    fs.mkdirSync(appOut, { recursive: true });
     // Export web into an `app` subdirectory so packaged apps will find
     // `app/index.html` under the ASAR resources (expected by main.js).
     const webOut = path.join(appOut, 'app');
