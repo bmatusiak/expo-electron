@@ -248,24 +248,10 @@ async function pack() {
     // static build separate from editable sources.
     const appOut = path.join(target, '.build');
     if (fs.existsSync(appOut)) {
-        console.log('Cleaning existing build at', appOut);
-        const rmrf = (p) => {
-            if (!fs.existsSync(p)) return;
-            for (const entry of fs.readdirSync(p)) {
-                const ePath = path.join(p, entry);
-                try {
-                    const st = fs.lstatSync(ePath);
-                    if (st.isDirectory()) rmrf(ePath); else fs.unlinkSync(ePath);
-                } catch (err) {
-                    // best-effort: report and continue
-                    console.error('Failed to remove', ePath, err && err.message);
-                }
-            }
-            try { fs.rmdirSync(p); } catch (err) { /* ignore */ }
-        };
-        rmrf(appOut);
+        console.log('Preserving existing build workspace at', appOut);
+    } else {
+        fs.mkdirSync(appOut, { recursive: true });
     }
-    fs.mkdirSync(appOut, { recursive: true });
     console.log('Packaging: building Expo web into', appOut);
     // Deterministic behavior: detect whether the installed Expo CLI supports
     // the `export` command and run exactly that form. Do NOT attempt multiple
@@ -305,67 +291,75 @@ async function pack() {
         // Copy electron main files into the workspace so packaging is self-contained
         const projectMain = path.join(target, 'main');
         const workMain = path.join(appOut, 'main');
-        if (fs.existsSync(workMain)) {
-            // remove existing workMain to ensure fresh copy
-            const rmrf = (p) => {
-                if (!fs.existsSync(p)) return;
-                for (const entry of fs.readdirSync(p)) {
-                    const ePath = path.join(p, entry);
-                    if (fs.lstatSync(ePath).isDirectory()) rmrf(ePath); else fs.unlinkSync(ePath);
-                }
-                fs.rmdirSync(p);
-            };
-            rmrf(workMain);
+        // If the workspace already has a `main` folder, preserve it for inspection;
+        // otherwise copy the project's `main` into the workspace.
+        if (!fs.existsSync(workMain) && fs.existsSync(projectMain)) {
+            copyRecursive(projectMain, workMain);
         }
-        if (fs.existsSync(projectMain)) copyRecursive(projectMain, workMain);
 
         // Read original package.json from the package and adapt it for the
         // packaging workspace.
         if (fs.existsSync(originalPkgPath)) {
+            // Read template package.json (from the expo-electron package)
             originalPkg = fs.readFileSync(originalPkgPath, 'utf8');
-            const pkgJson = JSON.parse(originalPkg);
-            // Create a workspace-specific package.json that points main to
-            // the copied main entry inside the workspace.
-            const workPkg = Object.assign({}, pkgJson);
-            workPkg.name = workPkg.name || (pkgJson.productName || 'expo-electron-workspace');
-            workPkg.main = 'main/main.js';
-            // Ensure description exists for deb maker
-            if (!workPkg.description && !workPkg.productDescription) workPkg.description = workPkg.productName || workPkg.name || 'Expo Electron App';
-
-            // If rpmbuild is missing, remove rpm makers from the copy so make
-            // doesn't fail (we avoid modifying the package's package.json).
-            const makers = (((workPkg || {}).config || {}).forge || {}).makers || [];
-            const hasRpm = makers.some((m) => {
-                const n = (m && m.name) || (typeof m === 'string' ? m : '');
-                return String(n).toLowerCase().includes('rpm');
-            });
-            if (hasRpm) {
-                const which = require('child_process').spawnSync('which', ['rpmbuild']);
-                if (which.status !== 0) {
-                    workPkg.config = workPkg.config || {};
-                    workPkg.config.forge = workPkg.config.forge || {};
-                    workPkg.config.forge.makers = makers.filter((m) => {
-                        const n = (m && m.name) || (typeof m === 'string' ? m : '');
-                        return !String(n).toLowerCase().includes('rpm');
-                    });
-                    console.log('rpmbuild not found; removed rpm maker from workspace package.json');
-                }
-            }
-
-            fs.writeFileSync(workPkgPath, JSON.stringify(workPkg, null, 2), 'utf8');
         }
+        let templateCfgForge = null;
+        try {
+            if (originalPkg) {
+                const t = JSON.parse(originalPkg);
+                templateCfgForge = ((t.config || {}).forge) || null;
+            }
+        } catch (e) { /* ignore template parse errors */ }
+
+        // Read project package.json to pull name/version/description
+        const projectPkgPath = path.join(PROJECT_ROOT, 'package.json');
+        let projectPkg = {};
+        try {
+            if (fs.existsSync(projectPkgPath)) projectPkg = JSON.parse(fs.readFileSync(projectPkgPath, 'utf8'));
+        } catch (e) { /* ignore */ }
+
+        // Build a minimal, deterministic workspace package.json using project values
+        const workPkg = {
+            name: projectPkg.name ? `${projectPkg.name}-electron` : 'expo-electron-workspace',
+            version: projectPkg.version || '1.0.0',
+            description: projectPkg.description || projectPkg.productName || projectPkg.name || 'Expo Electron App',
+            main: 'main/main.js',
+            devDependencies: projectPkg.devDependencies || { "electron": "*" },
+        };
+        if (templateCfgForge) {
+            workPkg.config = { forge: templateCfgForge };
+        }
+
+        // If rpmbuild is missing, remove rpm makers from the config so make won't fail
+        const makers = (((workPkg || {}).config || {}).forge || {}).makers || [];
+        const hasRpm = makers.some((m) => {
+            const n = (m && m.name) || (typeof m === 'string' ? m : '');
+            return String(n).toLowerCase().includes('rpm');
+        });
+        if (hasRpm) {
+            const which = require('child_process').spawnSync('which', ['rpmbuild']);
+            if (which.status !== 0) {
+                workPkg.config = workPkg.config || {};
+                workPkg.config.forge = workPkg.config.forge || {};
+                workPkg.config.forge.makers = makers.filter((m) => {
+                    const n = (m && m.name) || (typeof m === 'string' ? m : '');
+                    return !String(n).toLowerCase().includes('rpm');
+                });
+                console.log('rpmbuild not found; removed rpm maker from workspace package.json');
+            }
+        }
+
+        fs.writeFileSync(workPkgPath, JSON.stringify(workPkg, null, 2), 'utf8');
 
         // Run electron-forge make with cwd set to the workspace so outputs are
         // placed under appOut/out/make
         await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: appOut });
     } catch (e) {
         console.error('electron-forge make failed:', e && e.message);
-        // cleanup workspace package.json if we created one
-        try { if (fs.existsSync(workPkgPath)) fs.unlinkSync(workPkgPath); } catch (_) { }
+        // preserve workspace for inspection
         process.exit(5);
     }
-    // cleanup workspace package.json (leave workMain and outputs intact)
-    try { if (fs.existsSync(workPkgPath)) fs.unlinkSync(workPkgPath); } catch (err) { console.error('Failed to remove workspace package.json:', err && err.message); }
+    // preserve workspace package.json and outputs for inspection
     const artifactsPath = path.join(appOut, 'out', 'make');
     console.log('Packaging: complete — artifacts available at:', artifactsPath);
 }
