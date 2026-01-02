@@ -211,11 +211,15 @@ function runCommand(cmdPath, args, options = {}) {
 }
 
 async function pack() {
-    // Ensure prebuild exists
+    // Ensure prebuild exists; if not, run prebuild to create it (deterministic).
     const target = path.join(PROJECT_ROOT, 'electron');
     if (!fs.existsSync(target)) {
-        console.error('Package: missing', target, '\nRun `expo-electron prebuild` first to create the electron template in your project.');
-        process.exit(3);
+        console.log('Package: project electron/ not found, running prebuild to generate it.');
+        prebuild();
+        if (!fs.existsSync(target)) {
+            console.error('Package: prebuild failed to create', target);
+            process.exit(3);
+        }
     }
 
     // Ensure binaries
@@ -229,14 +233,33 @@ async function pack() {
         process.exit(2);
     }
 
-    // Build web into this package's `app` folder
-    const appOut = path.join(__dirname, 'app');
+    // Build web into the project's prebuild `electron/app` folder so packaging
+    // uses the editable prebuilt electron folder.
+    const appOut = path.join(target, 'app');
     if (!fs.existsSync(appOut)) fs.mkdirSync(appOut, { recursive: true });
     console.log('Packaging: building Expo web into', appOut);
-    try {
-        await runCommand(EXPO_CMD, ['build', 'web', '--no-dev', '--output-dir', appOut], { cwd: PROJECT_ROOT });
-    } catch (e) {
-        console.error('Expo web build failed:', e && e.message);
+    // Deterministic behavior: detect whether the installed Expo CLI supports
+    // the `export` command and run exactly that form. Do NOT attempt multiple
+    // fallbacks — fail loudly if the expected command is not available.
+    const helpCheck = require('child_process').spawnSync(EXPO_CMD, ['--help'], { encoding: 'utf8' });
+    if (helpCheck.error) {
+        console.error('Failed to execute expo --help:', helpCheck.error && helpCheck.error.message);
+        process.exit(2);
+    }
+    const helpOut = String(helpCheck.stdout || '') + String(helpCheck.stderr || '');
+    if (helpOut.includes('export')) {
+        const args = ['export', '.', '--output-dir', appOut, '-p', 'web'];
+        console.log('Running:', EXPO_CMD, args.join(' '));
+        try {
+            await runCommand(EXPO_CMD, args, { cwd: PROJECT_ROOT });
+        } catch (e) {
+            console.error('Expo export failed:', e && e.message);
+            process.exit(4);
+        }
+    } else {
+        console.error('Installed expo CLI does not advertise an `export` command.');
+        console.error('Per project policy this tool will not try fallback commands.');
+        console.error('Please run the appropriate web build/export for your Expo CLI manually from the project root, e.g. `expo export . --output-dir <dir> -p web`, then re-run this command.');
         process.exit(4);
     }
 
