@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 let mainWindow;
-const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:19006';
+const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const PROD_INDEX = path.join(__dirname, '..', 'app', 'index.html');
 
 function createWindow() {
@@ -21,11 +21,10 @@ function createWindow() {
     // Prefer a running dev server during development. In production require
     // the local built `index.html` so production builds never try to reach Metro.
     const isDev = process.env.NODE_ENV === 'development';
-    const expoUrl = process.env.EXPO_WEB_URL || DEV_URL;
 
-    if (isDev && process.env.EXPO_WEB_URL) {
-        mainWindow.loadURL(expoUrl).catch((err) => {
-            console.error('Failed to load dev URL', expoUrl, err);
+    if (isDev && DEV_URL) {
+        mainWindow.loadURL(DEV_URL).catch((err) => {
+            console.error('Failed to load dev URL', DEV_URL, err);
             app.exit(1);
         });
     } else {
