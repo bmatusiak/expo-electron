@@ -9,12 +9,13 @@ const PROD_INDEX = path.join(__dirname, '..', 'app', 'index.html');
 function createWindow() {
     const preloadPath = process.env.EXPO_PRELOAD_PATH ? path.resolve(process.env.EXPO_PRELOAD_PATH) : path.join(__dirname, 'preload.js');
     mainWindow = new BrowserWindow({
-        width: 1200,
-        height: 800,
+        width: 480,
+        height: 960,
         webPreferences: {
             preload: preloadPath,
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: false
         },
     });
 

@@ -162,6 +162,16 @@ function spawnElectron(cwd, resolvedUrl) {
 }
 
 async function start() {
+    // Ensure prebuild exists and generate autolink files into it
+    try {
+        prebuild();
+        const projectElectron = path.join(PROJECT_ROOT, 'electron');
+        const autolink = require(path.join(__dirname, 'lib', 'autolink'));
+        autolink.run(PROJECT_ROOT, projectElectron);
+    } catch (e) {
+        console.warn('Autolink/prebuild failed:', e && e.message);
+    }
+
     // Start Expo web dev server
     const expoProc = spawnExpoWeb();
     await waitForUrl(DEV_URL);
@@ -271,7 +281,15 @@ async function pack() {
     // overwritten. prebuild itself will skip existing files rather than
     // overwriting them.
     try {
+        // Run prebuild first to create the editable electron folder, then autolink into it
         prebuild();
+        const projectElectron = path.join(PROJECT_ROOT, 'electron');
+        try {
+            const autolink = require(path.join(__dirname, 'lib', 'autolink'));
+            autolink.run(PROJECT_ROOT, projectElectron);
+        } catch (e) {
+            console.warn('Autolink (package) failed:', e && e.message);
+        }
     } catch (e) {
         console.error('Package: prebuild failed:', e && e.message);
         process.exit(3);
@@ -460,5 +478,17 @@ if (require.main === module) {
     if (cmd === 'start') start();
     else if (cmd === 'prebuild') { prebuild(); process.exit(0); }
     else if (cmd === 'package') pack();
-    else console.error('unknown command', cmd);
+    else if (cmd === 'autolink') {
+        try {
+            // ensure prebuild folder exists so generated files can be placed there
+            prebuild();
+            const projectElectron = path.join(PROJECT_ROOT, 'electron');
+            const autolink = require(path.join(__dirname, 'lib', 'autolink'));
+            autolink.run(PROJECT_ROOT, projectElectron);
+            process.exit(0);
+        } catch (e) {
+            console.error('autolink failed:', e && e.message);
+            process.exit(1);
+        }
+    } else console.error('unknown command', cmd);
 }
