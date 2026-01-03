@@ -78,7 +78,7 @@ function spawnElectron(cwd, resolvedUrl) {
     console.log('Launching Electron in', cwd);
     const preloadPath = path.join(cwd, 'main', 'preload.js');
     const env = Object.assign({}, process.env, {
-        EXPO_WEB_URL: resolvedUrl || process.env.EXPO_WEB_URL || DEV_URL,
+        EXPO_WEB_URL: resolvedUrl || DEV_URL,
         EXPO_PRELOAD_PATH: preloadPath,
     });
     const electronEntry = path.join(cwd, 'main', 'main.js');
@@ -97,32 +97,12 @@ function spawnElectron(cwd, resolvedUrl) {
 async function start() {
     // Start Expo web dev server
     const expoProc = spawnExpoWeb();
+    await waitForUrl(DEV_URL);
 
-    // Wait for one of the likely web endpoints to be ready (check in parallel).
-    // FALLBACK/DEV-CONVENIENCE: probe multiple known dev endpoints and use
-    // whichever responds first. This is intended for development only.
-    const candidates = Array.from(new Set([process.env.EXPO_WEB_URL || DEV_URL, 'http://localhost:8081', 'http://localhost:19006']));
-    let resolvedUrl = null;
-    try {
-        const checks = candidates.map((url) => waitForUrl(url));
-        const overall = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout waiting for any candidate')), TIMEOUT_MS));
-        resolvedUrl = await Promise.race([overall, ...checks]);
-    } catch (e) {
-        console.error('expo web did not become ready on known ports:', e && e.message);
-        process.exit(1);
-    }
-
-    console.log('Detected Expo web URL:', resolvedUrl);
-
-    // Prefer a project-level `electron/` (created by `expo-electron prebuild`).
-    // FALLBACK: if a project-level `electron/` is not present, use the
-    // packaged template from this package. This allows editable prebuilds.
     const projectElectron = path.join(PROJECT_ROOT, 'electron');
     const cwd = fs.existsSync(projectElectron) ? projectElectron : path.join(__dirname);
     console.log('Using Electron working directory:', cwd);
-    // pass detected URL to electron env
-    process.env.EXPO_WEB_URL = resolvedUrl;
-    const electronProc = spawnElectron(cwd, resolvedUrl);
+    const electronProc = spawnElectron(cwd);
 
     // Centralized shutdown handling
     let isShuttingDown = false;
@@ -183,22 +163,6 @@ async function start() {
     process.on('SIGHUP', () => initiateShutdown(0));
 }
 
-function copyRecursive(src, dest) {
-    const stat = fs.statSync(src);
-    if (stat.isDirectory()) {
-        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-        for (const entry of fs.readdirSync(src)) {
-            copyRecursive(path.join(src, entry), path.join(dest, entry));
-        }
-    } else if (stat.isFile()) {
-        fs.copyFileSync(src, dest);
-    }
-}
-
-// Recursive copy that SKIPS existing destination files and logs a warning;
-// useful for prebuild and packaging where we must not overwrite developer edits.
-// FALLBACK/PROTECT: this intentionally avoids overwriting existing files
-// created by a developer; existing files are preserved and skipped.
 function copyRecursiveSkipExisting(src, dest) {
     const stat = fs.statSync(src);
     if (stat.isDirectory()) {
