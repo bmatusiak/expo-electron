@@ -1,37 +1,86 @@
 # expo-electron
 
-Dev & packaging helper for the Expo app in the parent folder. This README documents the current, deterministic workflow and recent fixes for production packaging.
+Dev helper that integrates an Expo web app with Electron for development and deterministic packaging.
 
 Quick commands (run from the project root):
 
-- **Install:** Run `npm install` in the project root so `expo`, `electron`, and `electron-forge` are available in `node_modules/.bin`.
-- **Prebuild (one-time):** `npx expo-electron prebuild` — copies the template `main/` into `<project>/electron` for editing.
-- **Dev:** `npx expo-electron start` — starts Expo web and launches Electron (dev mode).
-- **Package:** `npx expo-electron package` — builds the web app and runs `electron-forge make` to create distributables.
+- `npm install` — ensure project dependencies are installed so `expo`, `electron`, and `electron-forge` are available in `node_modules/.bin`.
+- `npx expo-electron prebuild` — copy the template `main/` into the project's `electron/` folder for editing (skips overwriting existing files).
+- `npx expo-electron start` — run Expo web and launch Electron (development mode).
+- `npx expo-electron package` — build the web app and run `electron-forge make` to produce distributables.
 
-What `package` does now (deterministic):
+How it works (high level)
 
-- Builds the Expo web export into: `electron/.build/app` (this is important — production `main.js` expects `app/index.html`).
-- After export the CLI adjusts `index.html` so it works with `file://` URLs:
-  - injects a `<base href="./">` if missing,
-  - rewrites root-absolute `src`/`href` attributes (e.g. `/_expo/...`) to relative paths (`./_expo/...`).
-- Creates a minimal packaging `package.json` inside `electron/.build` combining your project name/version and the template Forge config, and runs `electron-forge make` with cwd set to `electron/.build`.
-- If `rpmbuild` is not present on the machine, the tool removes any RPM maker from the Forge config so packaging does not fail unexpectedly.
-- The packaging workspace and outputs are preserved under `electron/.build` (artifacts at `electron/.build/out/make`) for inspection — nothing is deleted automatically.
+- Prebuild: copies the bundled template `main/` into the project's `electron/` folder but never overwrites existing files. A `.gitignore` is created in the prebuild folder to avoid checking in generated outputs.
+- Dev (`start`): runs `expo start --web`, waits for the dev server, then launches Electron with `main/main.js`. The Electron working directory is the project's `electron/` folder if present, otherwise the bundled template is used.
+- Packaging (`package`): exports the web build into `electron/.build/app` and runs `electron-forge make` inside `electron/.build` so artifacts are produced at `electron/.build/out/make`.
 
-Production behaviour and troubleshooting
+Deterministic packaging details
 
-- The packaged Electron `main.js` will require `app/index.html` to be present inside the packaged resources. If it's missing the app will log an error and exit with a non-zero code. This prevents silent fallbacks to a dev server.
-- If you see errors like `GET file:///_expo/... net::ERR_FILE_NOT_FOUND` in the devtools console after packaging:
-  - Confirm `electron/.build/app/index.html` exists and contains a `<base href="./">` near the top.
-  - Confirm assets exist in `electron/.build/app/_expo` or the expected relative paths.
-  - Re-run packaging: `rm -rf electron && npx expo-electron package` to regenerate the build and packaging workspace.
+- Web export: the CLI uses the installed Expo CLI's `export` command; if `export` is not available it fails loudly rather than guessing alternatives.
+- Post-export transformations: the exported `index.html` is adjusted to be compatible with `file://` URLs:
+  - If missing, a `<base href="./">` is injected.
+  - Root-absolute `src`/`href` attributes (for example paths starting with `/_expo/`) are rewritten to relative paths (`./_expo/...`).
+- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build` and `electron-forge make` is run there. If `rpmbuild` is not available, any RPM maker is removed to avoid failing the whole process.
 
-Notes and policy
+Autolinking native/electron modules
 
-- Deterministic, no-fallback behavior: the CLI checks for required commands and fails loudly with clear instructions (do not expect it to guess alternate CLI forms).
-- The `electron` folder created by `prebuild` is intended to be edited by developers; if it exists the CLI will prefer it over the bundled template in `node_modules`.
-- This helper prefers binaries installed at the project root (`node_modules/.bin`). Run `npm install` at the root before using packaging or dev commands.
+This package includes an `autolink` helper that scans the project's top-level dependencies (only those declared in the project's `package.json`) for packages that expose an `electron/` entry.
 
-If you want, I can add an explicit `--clean` option to remove `electron/.build` before packaging; otherwise the workspace is preserved for inspection.
+- Detection: `autolink` looks for packages installed at `projectRoot/node_modules/<name>` and only links packages that contain an `electron/index.js` entry (or a configured `expoBlock.entry`).
+-- Preload generation: `autolink` writes a generated preload script (default `src/preload.js`; when run into a prebuild target it will write `electron/main/preload.js`). The generated preload is not intended for manual edits and may be overwritten by subsequent autolink runs. The preload exposes a `native` object via `contextBridge.exposeInMainWorld('native', native)`.
+  - For each linked package it attempts to resolve a development path (`require.resolve('<name>/electron')` or configured entry) and a production path inside the packaged app (under `app.asar.unpacked/native/<name>/...` or `native/<name>/...`).
+  - If the module is resolvable in dev or present in the packaged resources, the implementation is required and exposed; otherwise a `{ _missing: true }` placeholder is provided so the preload remains robust.
+- Resource list: `autolink` also writes an `electron-resources.json` describing files to copy into the packaged app under `native/<package>/...`, including the package's `electron/` folder, its `main` entry, and compiled add-on outputs in `build/Release` or `build/Debug` when present.
+
+Production runtime behavior
+
+- `main/main.js` prefers loading a production `app/index.html` (packaged web export). If that file is present the app will load locally; if not, and `NODE_ENV` is `development`, it will attempt to load the dev server URL from `EXPO_WEB_URL`.
+- If neither a production index nor a dev server is available the process exits with a non-zero code — this prevents silent fallbacks.
+
+Troubleshooting
+
+- Missing binaries: the CLI checks for `expo`, `electron`, and `electron-forge` in `node_modules/.bin` and fails with actionable messages if they are missing. Run `npm install` at the project root first.
+- File not found errors after packaging: verify `electron/.build/app/index.html` exists and contains a `<base href="./">`, and confirm static assets exist under `electron/.build/app/_expo` (or the expected relative paths).
+- Autolink issues: the autolinker only considers packages installed at the project's top-level `node_modules`. If a package is nested or not declared in `package.json`, it will be skipped.
+
+Developer notes
+
+- The tool intentionally favors deterministic, fail-fast behavior: it validates the environment and fails loudly if an expected command or file is unavailable.
+-- The `electron/` prebuild folder is intended to be edited by developers; once created the CLI will not overwrite your edits — with one exception: generated artifacts created by the autolinker (for example `electron/main/preload.js`) may be regenerated and should not be edited directly.
+
+Where to look in the code
+
+- Autolink logic: [modules/expo-electron/lib/autolink.js](modules/expo-electron/lib/autolink.js#L1)
+- CLI entry and packaging flow: [modules/expo-electron/cli.js](modules/expo-electron/cli.js#L1)
+- Electron template main: [modules/expo-electron/main/main.js](modules/expo-electron/main/main.js#L1)
+
+If you'd like, I can add a `--clean` option to remove `electron/.build` prior to packaging, or add more diagnostic logging to the autolinker for tricky modules.
+
+Project snapshot (this repository)
+
+-- Generated prebuild: `electron/` — created by `npx expo-electron prebuild` and intended for developer edits. It contains:
+  - `electron/main/main.js` (template main process).
+  - Note: `electron/main/preload.js` is typically generated by the autolinker when it targets the prebuild; it is not intended for manual edits and may be overwritten.
+  - `.gitignore` to avoid checking in generated packaging outputs.
+- Packaging output: `electron/.build/` — created by `npx expo-electron package`. Typical contents in this project include:
+  - `electron/.build/app/index.html` and static assets under `electron/.build/app/_expo/` (the exported web build).
+  - `electron/.build/main/main.js` and `electron/.build/main/preload.js` (autolink-generated preload when `autolink` ran into the prebuild target).
+  - `electron/.build/native/<package>/...` — copied native resources (example: `native/example-native-module/index.js` and compiled addon under `native/example-native-module/build/Release`).
+  - `electron/.build/out/` or `electron/.build/out/make` — packaging artifacts produced by `electron-forge make`.
+- Autolink resources index: `electron/electron-resources.json` — generated resource mapping for packaging. Example from this repo:
+
+```json
+[
+  { "from": "node_modules/example-native-module/electron", "to": "native/example-native-module/electron" },
+  { "from": "node_modules/example-native-module/index.js", "to": "native/example-native-module/index.js" },
+  { "from": "node_modules/example-native-module/build/Release", "to": "native/example-native-module/build/Release" }
+]
+```
+
+Convenience script
+
+- `run.sh` in the project root demonstrates the workflow used here: it runs `npm install`, deletes any previous `electron/`, runs `npx expo-electron prebuild`, then `npx expo-electron package`, and finally runs the built app from `electron/.build/out/...`.
+
+These concrete examples reflect the files present in this workspace and should make it easier to troubleshoot packaging and native module inclusion.
 
