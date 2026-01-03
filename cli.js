@@ -58,6 +58,73 @@ function waitForUrl(url, timeoutMs = TIMEOUT_MS) {
     });
 }
 
+function copyRecursiveSkipExisting(src, dest) {
+    const stat = fs.statSync(src);
+    if (stat.isDirectory()) {
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        for (const entry of fs.readdirSync(src)) {
+            const s = path.join(src, entry);
+            const d = path.join(dest, entry);
+            if (fs.existsSync(d)) {
+                // If destination exists and is a directory, recurse into it to
+                // skip any existing children but copy missing ones. If it's a
+                // file, skip and warn (do not overwrite).
+                const dstStat = fs.statSync(d);
+                const srcStat = fs.statSync(s);
+                if (dstStat.isDirectory() && srcStat.isDirectory()) {
+                    copyRecursiveSkipExisting(s, d);
+                } else {
+                    console.log('Prebuild: skipping existing', d);
+                }
+            } else {
+                // Destination missing — perform a full copy
+                if (fs.statSync(s).isDirectory()) {
+                    copyRecursiveSkipExisting(s, d);
+                } else {
+                    fs.copyFileSync(s, d);
+                    console.log('Prebuild: copied', d);
+                }
+            }
+        }
+    } else if (stat.isFile()) {
+        if (fs.existsSync(dest)) {
+            console.log('Prebuild: skipping existing', dest);
+        } else {
+            fs.copyFileSync(src, dest);
+            console.log('Prebuild: copied', dest);
+        }
+    }
+}
+
+// Check for an executable in PATH using Node APIs only (cross-platform).
+function commandExistsInPath(cmd) {
+    const PATH = process.env.PATH || '';
+    const parts = PATH.split(path.delimiter).filter(Boolean);
+    if (process.platform === 'win32') {
+        const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';');
+        for (const dir of parts) {
+            for (const ext of pathext) {
+                const candidate = path.join(dir, cmd + ext);
+                try { if (fs.existsSync(candidate)) return true; } catch (e) { }
+            }
+        }
+        return false;
+    }
+    for (const dir of parts) {
+        const candidate = path.join(dir, cmd);
+        try { fs.accessSync(candidate, fs.constants.X_OK); return true; } catch (e) { }
+    }
+    return false;
+}
+
+function runCommand(cmdPath, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const p = spawn(cmdPath, args, { stdio: ['inherit', 'inherit', 'inherit'], ...options });
+        p.on('error', (err) => reject(err));
+        p.on('exit', (code) => code === 0 ? resolve(0) : reject(new Error('exit ' + code)));
+    });
+}
+
 function spawnExpoWeb() {
     // Build env without CI so Metro hot-reload remains enabled
     const env = Object.assign({}, process.env);
@@ -163,65 +230,6 @@ async function start() {
     process.on('SIGHUP', () => initiateShutdown(0));
 }
 
-function copyRecursiveSkipExisting(src, dest) {
-    const stat = fs.statSync(src);
-    if (stat.isDirectory()) {
-        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-        for (const entry of fs.readdirSync(src)) {
-            const s = path.join(src, entry);
-            const d = path.join(dest, entry);
-            if (fs.existsSync(d)) {
-                // If destination exists and is a directory, recurse into it to
-                // skip any existing children but copy missing ones. If it's a
-                // file, skip and warn (do not overwrite).
-                const dstStat = fs.statSync(d);
-                const srcStat = fs.statSync(s);
-                if (dstStat.isDirectory() && srcStat.isDirectory()) {
-                    copyRecursiveSkipExisting(s, d);
-                } else {
-                    console.log('Prebuild: skipping existing', d);
-                }
-            } else {
-                // Destination missing — perform a full copy
-                if (fs.statSync(s).isDirectory()) {
-                    copyRecursiveSkipExisting(s, d);
-                } else {
-                    fs.copyFileSync(s, d);
-                    console.log('Prebuild: copied', d);
-                }
-            }
-        }
-    } else if (stat.isFile()) {
-        if (fs.existsSync(dest)) {
-            console.log('Prebuild: skipping existing', dest);
-        } else {
-            fs.copyFileSync(src, dest);
-            console.log('Prebuild: copied', dest);
-        }
-    }
-}
-
-// Check for an executable in PATH using Node APIs only (cross-platform).
-function commandExistsInPath(cmd) {
-    const PATH = process.env.PATH || '';
-    const parts = PATH.split(path.delimiter).filter(Boolean);
-    if (process.platform === 'win32') {
-        const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';');
-        for (const dir of parts) {
-            for (const ext of pathext) {
-                const candidate = path.join(dir, cmd + ext);
-                try { if (fs.existsSync(candidate)) return true; } catch (e) { }
-            }
-        }
-        return false;
-    }
-    for (const dir of parts) {
-        const candidate = path.join(dir, cmd);
-        try { fs.accessSync(candidate, fs.constants.X_OK); return true; } catch (e) { }
-    }
-    return false;
-}
-
 function prebuild() {
     const target = path.join(PROJECT_ROOT, 'electron');
     const srcMain = path.join(__dirname, 'main');
@@ -254,14 +262,6 @@ function prebuild() {
         console.error('Prebuild: failed to write .gitignore', e && e.message);
     }
     console.log('Prebuild: done. You can now edit the electron files at', target);
-}
-
-function runCommand(cmdPath, args, options = {}) {
-    return new Promise((resolve, reject) => {
-        const p = spawn(cmdPath, args, { stdio: ['inherit', 'inherit', 'inherit'], ...options });
-        p.on('error', (err) => reject(err));
-        p.on('exit', (code) => code === 0 ? resolve(0) : reject(new Error('exit ' + code)));
-    });
 }
 
 async function pack() {
