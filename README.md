@@ -71,6 +71,6 @@ Developer notes
 
 Where to look in the code
 
-- Autolink logic: [modules/expo-electron/lib/autolink.js](modules/expo-electron/lib/autolink.js#L1)
-- CLI entry and packaging flow: [modules/expo-electron/cli.js](modules/expo-electron/cli.js#L1)
-- Electron template main: [modules/expo-electron/main/main.js](modules/expo-electron/main/main.js#L1)
+- Autolink logic: [lib/autolink.js](lib/autolink.js#L1)
+- CLI entry and packaging flow: [cli.js](cli.js#L1)
+- Electron template main: [main/main.js](main/main.js#L1)
