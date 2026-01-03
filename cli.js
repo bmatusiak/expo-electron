@@ -258,7 +258,7 @@ function prebuild() {
 
 function runCommand(cmdPath, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const p = spawn(cmdPath, args, Object.assign({ stdio: 'inherit' }, options));
+        const p = spawn(cmdPath, args, { stdio: ['inherit', 'inherit', 'inherit'], ...options });
         p.on('error', (err) => reject(err));
         p.on('exit', (code) => code === 0 ? resolve(0) : reject(new Error('exit ' + code)));
     });
