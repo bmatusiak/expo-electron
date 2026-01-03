@@ -525,26 +525,8 @@ async function pack(makeMakers) {
         }
         workPkg.config = { forge: defaultForgeConfig };
 
-        // FALLBACK: If rpmbuild is not available on the host PATH, remove
-        // any RPM maker entries from the Forge config so `electron-forge` does
-        // not attempt an RPM build that would fail. This keeps packaging
-        // functional on systems without rpmbuild.
-        const makers = (((workPkg || {}).config || {}).forge || {}).makers || [];
-        const hasRpm = makers.some((m) => {
-            const n = (m && m.name) || (typeof m === 'string' ? m : '');
-            return String(n).toLowerCase().includes('rpm');
-        });
-        if (hasRpm) {
-            if (!commandExistsInPath('rpmbuild')) {
-                workPkg.config = workPkg.config || {};
-                workPkg.config.forge = workPkg.config.forge || {};
-                workPkg.config.forge.makers = makers.filter((m) => {
-                    const n = (m && m.name) || (typeof m === 'string' ? m : '');
-                    return !String(n).toLowerCase().includes('rpm');
-                });
-                console.log('rpmbuild not found in PATH; removed rpm maker from workspace package.json');
-            }
-        }
+        // Note: makers are filtered only when `--make` is provided; no
+        // automatic removal of makers is performed here.
 
         fs.writeFileSync(workPkgPath, JSON.stringify(workPkg, null, 2), 'utf8');
 

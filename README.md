@@ -21,11 +21,10 @@ Deterministic packaging details
 - Post-export transformations: the exported `index.html` is adjusted to be compatible with `file://` URLs:
   - If missing, a `<base href="./">` is injected.
   - Root-absolute `src`/`href` attributes (for example paths starting with `/_expo/`) are rewritten to relative paths (`./_expo/...`).
--- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build`. The CLI always runs `electron-forge package` so packaging hooks and the packaged application are produced deterministically. The final step (`electron-forge make`) that creates distributables is only run when you explicitly pass `--make` to `npx expo-electron package` (see examples below). If `rpmbuild` is not available, any RPM maker is removed to avoid failing the whole process.
+-- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build`. The CLI always runs `electron-forge package` so packaging hooks and the packaged application are produced deterministically. The final step (`electron-forge make`) that creates distributables is only run when you explicitly pass `--make` to `npx expo-electron package` (see examples below).
 
 Package options
 
-- `--make <list>`: a comma-separated list of maker tokens to produce (examples: `zip`, `deb`, `rpm`). Example usage:
 
   - Run packaging only (no distributables):
 
