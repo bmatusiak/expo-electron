@@ -34,7 +34,7 @@ const ROOT_NODE_BIN = path.join(PROJECT_ROOT, 'node_modules', '.bin');
 const EXPO_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'expo.cmd' : 'expo');
 const ELECTRON_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'electron.cmd' : 'electron');
 
-const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:19006';
+const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const POLL_INTERVAL = 500;
 const TIMEOUT_MS = 120000;
 
