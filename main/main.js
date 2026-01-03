@@ -19,24 +19,26 @@ function createWindow() {
         },
     });
 
-    // Prefer a running dev server during development. In production require
-    // the local built `index.html` so production builds never try to reach Metro.
+    // Determine whether a production index exists in the packaged app.
+    // If the production index is present we prefer it (packaged apps should
+    // always load local files). Only fall back to the dev server when a
+    // production build is not available and NODE_ENV indicates development.
     const isDev = process.env.NODE_ENV === 'development';
+    const hasProdIndex = fs.existsSync(PROD_INDEX);
 
-    if (isDev && DEV_URL) {
+    if (hasProdIndex) {
+        mainWindow.loadFile(PROD_INDEX).catch((err) => {
+            console.error('Failed to load production index', PROD_INDEX, err);
+            app.exit(1);
+        });
+    } else if (isDev && DEV_URL) {
         mainWindow.loadURL(DEV_URL).catch((err) => {
             console.error('Failed to load dev URL', DEV_URL, err);
             app.exit(1);
         });
     } else {
-        if (!fs.existsSync(PROD_INDEX)) {
-            console.error('Production index not found at', PROD_INDEX);
-            app.exit(1);
-        }
-        mainWindow.loadFile(PROD_INDEX).catch((err) => {
-            console.error('Failed to load production index', PROD_INDEX, err);
-            app.exit(1);
-        });
+        console.error('No production index found and dev server not available at', DEV_URL);
+        app.exit(1);
     }
 }
 

@@ -404,19 +404,44 @@ async function pack() {
             copyRecursiveSkipExisting(projectMain, workMain);
         }
 
-        // Read original package.json from the package and adapt it for the
-        // packaging workspace.
-        if (fs.existsSync(originalPkgPath)) {
-            // Read template package.json (from the expo-electron package)
-            originalPkg = fs.readFileSync(originalPkgPath, 'utf8');
-        }
-        let templateCfgForge = null;
+        // Copy any autolink-generated electron resources into the packaging
+        // workspace so native files (and electron/ folders from modules) are
+        // available to the packager. The autolinker writes an
+        // `electron-resources.json` file into the project's `electron/`
+        // folder describing {from,to} entries relative to the project root.
         try {
-            if (originalPkg) {
-                const t = JSON.parse(originalPkg);
-                templateCfgForge = ((t.config || {}).forge) || null;
+            const resourcesPath = path.join(target, 'electron-resources.json');
+            if (fs.existsSync(resourcesPath)) {
+                const resources = JSON.parse(fs.readFileSync(resourcesPath, 'utf8')) || [];
+                for (const r of resources) {
+                    try {
+                        // source is project-root relative
+                        const src = path.join(PROJECT_ROOT, r.from || '');
+                        const dest = path.join(appOut, r.to || '');
+                        if (!fs.existsSync(src)) {
+                            console.warn('Packaging: autolink resource missing, skipping', src);
+                            continue;
+                        }
+                        // Ensure destination parent exists
+                        const dpar = path.dirname(dest);
+                        if (!fs.existsSync(dpar)) fs.mkdirSync(dpar, { recursive: true });
+                        // Copy resource (preserve directories)
+                        copyRecursiveSkipExisting(src, dest);
+                        console.log('Packaging: copied autolink resource', src, '->', dest);
+                    } catch (e) {
+                        console.warn('Packaging: failed to copy autolink resource', e && e.message);
+                    }
+                }
+            } else {
+                console.log('Packaging: no autolink resources file at', resourcesPath);
             }
-        } catch (e) { /* ignore template parse errors */ }
+        } catch (e) {
+            console.warn('Packaging: failed to apply autolink resources:', e && e.message);
+        }
+
+        // Do not inherit any Forge config from the template package.json.
+        // The CLI controls the Forge configuration for the packaging workspace
+        // to ensure predictable makers and packager settings for every project.
 
         // Read project package.json to pull name/version/description
         const projectPkgPath = path.join(PROJECT_ROOT, 'package.json');
@@ -433,9 +458,26 @@ async function pack() {
             main: 'main/main.js',
             devDependencies: projectPkg.devDependencies || { "electron": "*" },
         };
-        if (templateCfgForge) {
-            workPkg.config = { forge: templateCfgForge };
-        }
+        // Inject a sensible default Forge config so `electron-forge make` has
+        // makers and packager settings to run deterministically.
+        const defaultForgeConfig = {
+            packagerConfig: {
+                asar: true,
+                asarUnpack: ['**/*.node'],
+                // Ensure native folders copied outside the ASAR so `.node`
+                // binaries can be loaded directly at runtime. We copy
+                // autolink resources into `native/` in the workspace, so
+                // include that folder as an extra resource.
+                extraResource: ['native']
+            },
+            makers: [
+                { name: '@electron-forge/maker-squirrel', config: {} },
+                { name: '@electron-forge/maker-zip', platforms: ['darwin', 'linux'] },
+                { name: '@electron-forge/maker-deb', config: {} },
+                { name: '@electron-forge/maker-rpm', config: {} }
+            ]
+        };
+        workPkg.config = { forge: defaultForgeConfig };
 
         // FALLBACK: If rpmbuild is not available on the host PATH, remove
         // any RPM maker entries from the Forge config so `electron-forge` does
