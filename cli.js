@@ -38,6 +38,22 @@ const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const POLL_INTERVAL = 500;
 const TIMEOUT_MS = 120000;
 
+function parseMakeArg() {
+    const argv = process.argv.slice(2);
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a.startsWith('--make=')) {
+            const val = a.split('=')[1] || '';
+            return val.split(',').map((s) => s.trim()).filter(Boolean);
+        }
+        if (a === '--make') {
+            const v = argv[i + 1];
+            if (v && !v.startsWith('--')) return v.split(',').map((s) => s.trim()).filter(Boolean);
+        }
+    }
+    return null;
+}
+
 function waitForUrl(url, timeoutMs = TIMEOUT_MS) {
     const start = Date.now();
     return new Promise((resolve, reject) => {
@@ -281,7 +297,7 @@ function prebuild() {
     console.log('Prebuild: done. You can now edit the electron files at', target);
 }
 
-async function pack() {
+async function pack(makeMakers) {
     // Ensure prebuild exists; if not, run prebuild to create it (deterministic).
     const target = path.join(PROJECT_ROOT, 'electron');
     // Always run prebuild step so users get warnings if files would be
@@ -484,6 +500,29 @@ async function pack() {
                 { name: '@electron-forge/maker-rpm', config: {} }
             ]
         };
+        // Only run `make` when the user explicitly requested makers via
+        // `--make`. If no `--make` was provided, skip the making step and
+        // keep the packaging workspace suitable for inspection.
+        let skipMake = false;
+        if (Array.isArray(makeMakers) && makeMakers.length > 0) {
+            const tokens = makeMakers.map((t) => String(t).toLowerCase());
+            defaultForgeConfig.makers = (defaultForgeConfig.makers || []).filter((m) => {
+                const n = (m && m.name) || (typeof m === 'string' ? m : '');
+                const lower = String(n).toLowerCase();
+                return tokens.some((tok) => lower.includes(tok));
+            });
+            if (!defaultForgeConfig.makers || defaultForgeConfig.makers.length === 0) {
+                console.log('Packaging: --make provided but no matching makers found; will skip `make`.');
+                skipMake = true;
+            } else {
+                console.log('Packaging: filtered makers to', defaultForgeConfig.makers.map((m) => (m && m.name) || m));
+            }
+        } else {
+            // No --make provided: skip the make step entirely by clearing makers.
+            skipMake = true;
+            defaultForgeConfig.makers = [];
+            console.log('Packaging: no --make provided; skipping distributable creation (electron-forge make).');
+        }
         workPkg.config = { forge: defaultForgeConfig };
 
         // FALLBACK: If rpmbuild is not available on the host PATH, remove
@@ -509,9 +548,25 @@ async function pack() {
 
         fs.writeFileSync(workPkgPath, JSON.stringify(workPkg, null, 2), 'utf8');
 
-        // Run electron-forge make with cwd set to the workspace so outputs are
-        // placed under appOut/out/make
-        await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: appOut });
+        // Always run `electron-forge package` so packaging hooks and the
+        // packaging step run (this produces the packaged application but
+        // not the final distributables). Only run `electron-forge make`
+        // when the user explicitly requested makers via `--make`.
+        try {
+            console.log('Packaging: running electron-forge package');
+            await runCommand(ELECTRON_FORGE_CMD, ['package'], { cwd: appOut });
+        } catch (e) {
+            console.error('electron-forge package failed:', e && e.message);
+            process.exit(5);
+        }
+
+        const makersInWorkspace = (((workPkg || {}).config || {}).forge || {}).makers || [];
+        if (!skipMake && Array.isArray(makersInWorkspace) && makersInWorkspace.length > 0) {
+            console.log('Packaging: running electron-forge make');
+            await runCommand(ELECTRON_FORGE_CMD, ['make'], { cwd: appOut });
+        } else {
+            console.log('Packaging: skipping electron-forge make');
+        }
     } catch (e) {
         console.error('electron-forge make failed:', e && e.message);
         // preserve workspace for inspection
@@ -526,7 +581,10 @@ if (require.main === module) {
     const cmd = process.argv[2] || 'start';
     if (cmd === 'start') start();
     else if (cmd === 'prebuild') { prebuild(); process.exit(0); }
-    else if (cmd === 'package') pack();
+    else if (cmd === 'package') {
+        const makeMakers = parseMakeArg();
+        pack(makeMakers);
+    }
     else if (cmd === 'autolink') {
         try {
             // ensure prebuild folder exists so generated files can be placed there

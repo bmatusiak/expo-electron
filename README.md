@@ -7,7 +7,7 @@ Quick commands (run from the project root):
 - `npm install` — ensure project dependencies are installed so `expo`, `electron`, and `electron-forge` are available in `node_modules/.bin`.
 - `npx expo-electron prebuild` — copy the template `main/` into the project's `electron/` folder for editing (skips overwriting existing files).
 - `npx expo-electron start` — run Expo web and launch Electron (development mode).
-- `npx expo-electron package` — build the web app and run `electron-forge make` to produce distributables.
+-- `npx expo-electron package` — build the web app and run packaging steps. By default this runs `electron-forge package` (preparing the packaged app and running packaging hooks) but will only run `electron-forge make` to produce final distributables when you pass `--make` (for example `--make zip,deb`).
 
 How it works (high level)
 
@@ -21,7 +21,28 @@ Deterministic packaging details
 - Post-export transformations: the exported `index.html` is adjusted to be compatible with `file://` URLs:
   - If missing, a `<base href="./">` is injected.
   - Root-absolute `src`/`href` attributes (for example paths starting with `/_expo/`) are rewritten to relative paths (`./_expo/...`).
-- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build` and `electron-forge make` is run there. If `rpmbuild` is not available, any RPM maker is removed to avoid failing the whole process.
+-- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build`. The CLI always runs `electron-forge package` so packaging hooks and the packaged application are produced deterministically. The final step (`electron-forge make`) that creates distributables is only run when you explicitly pass `--make` to `npx expo-electron package` (see examples below). If `rpmbuild` is not available, any RPM maker is removed to avoid failing the whole process.
+
+Package options
+
+- `--make <list>`: a comma-separated list of maker tokens to produce (examples: `zip`, `deb`, `rpm`). Example usage:
+
+  - Run packaging only (no distributables):
+
+    `npx expo-electron package`
+
+  - Run packaging and produce only `zip` and `deb` distributables:
+
+    `npx expo-electron package --make zip,deb`
+
+  - The CLI filters known makers by fuzzy name matching (e.g. `zip` matches `@electron-forge/maker-zip`). If no matching makers are found the `make` step is skipped.
+
+Available makers (tokens)
+
+- `squirrel` — maps to `@electron-forge/maker-squirrel` (Windows/Squirrel)
+- `zip` — maps to `@electron-forge/maker-zip` (Zip archive; configured for darwin, linux)
+- `deb` — maps to `@electron-forge/maker-deb` (Debian package)
+- `rpm` — maps to `@electron-forge/maker-rpm` (RPM package)
 
 Autolinking native/electron modules
 
@@ -78,9 +99,11 @@ Project snapshot (this repository)
 ]
 ```
 
+
 Convenience script
 
 - `run.sh` in the project root demonstrates the workflow used here: it runs `npm install`, deletes any previous `electron/`, runs `npx expo-electron prebuild`, then `npx expo-electron package`, and finally runs the built app from `electron/.build/out/...`.
+  - Note: `run.sh` calls `npx expo-electron package` without `--make`, so by default it prepares the packaged application but does not create distributables. To make distributables with the convenience script edit it to pass `--make` (for example `npx expo-electron package --make zip,deb`).
 
 These concrete examples reflect the files present in this workspace and should make it easier to troubleshoot packaging and native module inclusion.
 
