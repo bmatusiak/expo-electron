@@ -365,7 +365,7 @@ async function pack(makeMakers) {
     // Deterministic behavior: detect whether the installed Expo CLI supports
     // the `export` command and run exactly that form. Do NOT attempt multiple
     // fallbacks — fail loudly if the expected command is not available.
-    const helpCheck = require('child_process').spawnSync(EXPO_CMD, ['--help'], { encoding: 'utf8' });
+    const helpCheck = require('child_process').spawnSync(EXPO_CMD, ['--help'], { encoding: 'utf8', shell: process.platform === 'win32' });
     if (helpCheck.error) {
         console.error('Failed to execute expo --help:', helpCheck.error && helpCheck.error.message);
         process.exit(2);
