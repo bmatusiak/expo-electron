@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -238,7 +238,30 @@ async function start() {
 
     function sendSigint(p) {
         if (!p || !p.pid) return;
-        try { p.kill('SIGINT'); } catch (e) { }
+        try {
+            if (process.platform === 'win32') {
+                // Windows: SIGINT often doesn't propagate, and with `shell:true`
+                // the PID may be a wrapper. Kill the process tree synchronously.
+                try { process.kill(p.pid, 'SIGINT'); } catch (e) { }
+
+                try {
+                    const r1 = spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
+                    if (r1.error) console.warn('taskkill /PID failed:', r1.error && r1.error.message);
+                } catch (e) {
+                    console.warn('taskkill /PID threw:', e && e.message);
+                }
+
+                // Backup: kill any remaining Electron processes.
+                try {
+                    const r2 = spawnSync('taskkill', ['/IM', 'electron.exe', '/T', '/F'], { windowsHide: true });
+                    if (r2.error) console.warn('taskkill /IM electron.exe failed:', r2.error && r2.error.message);
+                } catch (e) {
+                    console.warn('taskkill /IM threw:', e && e.message);
+                }
+            } else {
+                p.kill('SIGINT');
+            }
+        } catch (e) { }
     }
 
     function initiateShutdown(code) {
