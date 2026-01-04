@@ -194,6 +194,13 @@ async function start() {
         prebuild();
         const projectElectron = path.join(PROJECT_ROOT, 'electron');
         const autolink = require(path.join(__dirname, 'lib', 'autolink'));
+        // Rebuild native modules in the project before autolink so any
+        // native source changes are compiled and available to autolinker.
+        try {
+            await runCommand('npm', ['rebuild'], { cwd: PROJECT_ROOT });
+        } catch (e) {
+            console.warn('npm rebuild failed:', e && e.message);
+        }
         autolink.run(PROJECT_ROOT, projectElectron);
     } catch (e) {
         console.warn('Autolink/prebuild failed:', e && e.message);
