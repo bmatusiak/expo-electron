@@ -139,7 +139,9 @@ function commandExistsInPath(cmd) {
 
 function runCommand(cmdPath, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const p = spawn(cmdPath, args, { stdio: ['inherit', 'inherit', 'inherit'], ...options });
+        const spawnOptions = { stdio: ['inherit', 'inherit', 'inherit'], ...options };
+        if (spawnOptions.shell === undefined && process.platform === 'win32') spawnOptions.shell = true;
+        const p = spawn(cmdPath, args, spawnOptions);
         p.on('error', (err) => reject(err));
         p.on('exit', (code) => code === 0 ? resolve(0) : reject(new Error('exit ' + code)));
     });
@@ -156,7 +158,9 @@ function spawnExpoWeb() {
         process.exit(2);
     }
     console.log('Starting Expo (web) via', EXPO_CMD, 'start --web');
-    const child = spawn(EXPO_CMD, ['start', '--web'], { stdio: 'inherit', env, cwd: PROJECT_ROOT });
+    const expoSpawnOpts = { stdio: 'inherit', env, cwd: PROJECT_ROOT };
+    if (expoSpawnOpts.shell === undefined && process.platform === 'win32') expoSpawnOpts.shell = true;
+    const child = spawn(EXPO_CMD, ['start', '--web'], expoSpawnOpts);
     child.on('error', (err) => console.error('Expo process error:', err && err.message));
     return child;
 }
@@ -167,6 +171,7 @@ function spawnElectron(cwd, resolvedUrl) {
     const env = Object.assign({}, process.env, {
         EXPO_WEB_URL: resolvedUrl || DEV_URL,
         EXPO_PRELOAD_PATH: preloadPath,
+        NODE_ENV: 'development',
     });
     const electronEntry = path.join(cwd, 'main', 'main.js');
     if (!fs.existsSync(ELECTRON_CMD)) {
@@ -176,7 +181,9 @@ function spawnElectron(cwd, resolvedUrl) {
     console.log('Starting Electron via', ELECTRON_CMD, electronEntry);
     // Give Electron an ignored stdin so it does not steal terminal input from
     // the Expo process. Keep stdout/stderr inherited so logs still appear.
-    const child = spawn(ELECTRON_CMD, [electronEntry, '--no-sandbox'], { stdio: ['ignore', 'inherit', 'inherit'], cwd, env });
+    const electronSpawnOpts = { stdio: ['ignore', 'inherit', 'inherit'], cwd, env };
+    if (electronSpawnOpts.shell === undefined && process.platform === 'win32') electronSpawnOpts.shell = true;
+    const child = spawn(ELECTRON_CMD, [electronEntry, '--no-sandbox'], electronSpawnOpts);
     child.on('error', (err) => console.error('Electron process error:', err && err.message));
     return child;
 }
