@@ -323,7 +323,7 @@ function prebuild() {
     try {
         const gi = path.join(target, '.gitignore');
         if (!fs.existsSync(gi)) {
-            fs.writeFileSync(gi, '.build\n');
+            fs.writeFileSync(gi, 'build\n');
             console.log('Prebuild: wrote', gi);
         } else {
             console.log('Prebuild: .gitignore already exists; leaving in place');
@@ -366,10 +366,10 @@ async function pack(makeMakers) {
         process.exit(2);
     }
 
-    // Build web into the project's prebuild `electron/.build` folder so
+    // Build web into the project's prebuild `electron/build` folder so
     // packaging uses the editable prebuilt electron folder but keeps the
     // static build separate from editable sources.
-    const appOut = path.join(target, '.build');
+    const appOut = path.join(target, 'build');
     if (fs.existsSync(appOut)) {
         console.log('Removing existing build workspace at', appOut);
         try {
@@ -446,7 +446,7 @@ async function pack(makeMakers) {
     }
 
     // Run electron-forge make from a temporary packaging workspace inside the
-    // project's `electron/.build` directory so all outputs live under that
+    // project's `electron/build` directory so all outputs live under that
     // folder. Create a minimal packaging workspace there and run `make`.
     console.log('Packaging: running electron-forge make in packaging workspace');
     const originalPkgPath = path.join(__dirname, 'package.json');
@@ -515,6 +515,7 @@ async function pack(makeMakers) {
             name: projectPkg.name ? `${projectPkg.name}-electron` : 'expo-electron-workspace',
             version: projectPkg.version || '1.0.0',
             description: projectPkg.description || projectPkg.productName || projectPkg.name || 'Expo Electron App',
+            author: projectPkg.author,
             main: 'main/main.js',
             devDependencies: projectPkg.devDependencies || { "electron": "*" },
         };
