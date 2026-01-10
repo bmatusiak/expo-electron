@@ -43,13 +43,7 @@ function createWindow() {
 }
 
 // electron-squirrel-startup is only needed for Squirrel.Windows install/uninstall events.
-// In some packaging setups this dependency may not be present in the final app; treat it as optional.
-let isSquirrelStartup = false;
-try {
-    isSquirrelStartup = !!require('electron-squirrel-startup');
-} catch (e) {
-    isSquirrelStartup = false;
-}
+let isSquirrelStartup = !!require('electron-squirrel-startup');
 if (isSquirrelStartup) app.quit();
 
 app.whenReady().then(() => {
