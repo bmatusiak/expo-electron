@@ -32,6 +32,10 @@ Package options
 
 Packaging copies those resources into the Forge workspace, but prunes native build outputs so only `*.node` files are copied from `build/Release` and `build/Debug`.
 
+By default, those resources are packaged inside `app.asar` (so JS files are not exposed as loose files). Only `*.node` binaries are unpacked via Forge's `asarUnpack` setting.
+
+If you explicitly want the old behavior (copy the whole `native/` folder outside the ASAR as an extra resource), set `EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE=1` before running `npx expo-electron package`.
+
   - Run packaging only (no distributables):
 
     `npx expo-electron package`

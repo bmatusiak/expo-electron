@@ -276,6 +276,7 @@ function commandExistsInPath(cmd) {
 
 function runCommand(cmdPath, args, options = {}) {
     return new Promise((resolve, reject) => {
+        /** @type {import('child_process').SpawnOptions} */
         const spawnOptions = { stdio: ['inherit', 'inherit', 'inherit'], ...options };
         if (spawnOptions.shell === undefined && process.platform === 'win32') spawnOptions.shell = true;
         const p = spawn(cmdPath, args, spawnOptions);
@@ -295,6 +296,7 @@ function spawnExpoWeb() {
         process.exit(2);
     }
     console.log('Starting Expo (web) via', EXPO_CMD, 'start --web');
+    /** @type {import('child_process').SpawnOptions} */
     const expoSpawnOpts = { stdio: 'inherit', env, cwd: PROJECT_ROOT };
     if (expoSpawnOpts.shell === undefined && process.platform === 'win32') expoSpawnOpts.shell = true;
     const child = spawn(EXPO_CMD, ['start', '--web'], expoSpawnOpts);
@@ -318,6 +320,7 @@ function spawnElectron(cwd, resolvedUrl) {
     console.log('Starting Electron via', ELECTRON_CMD, electronEntry);
     // Give Electron an ignored stdin so it does not steal terminal input from
     // the Expo process. Keep stdout/stderr inherited so logs still appear.
+    /** @type {import('child_process').SpawnOptions} */
     const electronSpawnOpts = { stdio: ['ignore', 'inherit', 'inherit'], cwd, env };
     if (electronSpawnOpts.shell === undefined && process.platform === 'win32') electronSpawnOpts.shell = true;
     const child = spawn(ELECTRON_CMD, [electronEntry, '--no-sandbox'], electronSpawnOpts);
@@ -702,11 +705,9 @@ async function pack(makeMakers) {
             packagerConfig: {
                 asar: true,
                 asarUnpack: ['**/*.node'],
-                // Ensure native folders copied outside the ASAR so `.node`
-                // binaries can be loaded directly at runtime. We copy
-                // autolink resources into `native/` in the workspace, so
-                // include that folder as an extra resource.
-                extraResource: ['native']
+                // Default: keep JS inside app.asar, and rely on asarUnpack for *.node.
+                // Opt-in to the old behavior (expose native JS outside ASAR) by setting:
+                //   EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE=1
             },
             makers: [
                 { name: '@electron-forge/maker-squirrel', config: {} },
@@ -715,6 +716,11 @@ async function pack(makeMakers) {
                 { name: '@electron-forge/maker-rpm', config: {} }
             ]
         };
+
+        if (['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE || '').toLowerCase())) {
+            defaultForgeConfig.packagerConfig.extraResource = ['native'];
+            console.log('Packaging: EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE set; native resources will be copied outside ASAR');
+        }
         // Only run `make` when the user explicitly requested makers via
         // `--make`. If no `--make` was provided, skip the making step and
         // keep the packaging workspace suitable for inspection.
