@@ -576,7 +576,6 @@ async function pack(makeMakers) {
                         "default-src 'self'",
                         "base-uri 'self'",
                         "object-src 'none'",
-                        "frame-ancestors 'none'",
                         "form-action 'self'",
                         "img-src 'self' data: blob:",
                         "font-src 'self' data:",
@@ -585,13 +584,29 @@ async function pack(makeMakers) {
                         "connect-src 'self' https: wss:",
                     ].join('; ');
                     const csp = String(process.env.EXPO_ELECTRON_CSP || defaultCsp);
+
+                    // `frame-ancestors` is ignored in <meta http-equiv="Content-Security-Policy">.
+                    // Keep it in the Electron response-header CSP (installed in main.js),
+                    // but strip it from the meta CSP to avoid confusing console warnings.
+                    const cspForMeta = csp
+                        .replace(/(^|;)\s*frame-ancestors\s+[^;]*/gi, '$1')
+                        .replace(/;\s*;/g, ';')
+                        .replace(/^\s*;\s*/g, '')
+                        .replace(/\s*;\s*$/g, '')
+                        .trim();
+                    if (!cspForMeta) {
+                        // If stripping leaves nothing, skip injecting the meta tag.
+                        fs.writeFileSync(indexPath, html, 'utf8');
+                        console.log('Post-export: fixed asset paths and ensured base href in', indexPath);
+                        return;
+                    }
                     const escapeAttr = (s) => String(s)
                         .replace(/&/g, '&amp;')
                         .replace(/</g, '&lt;')
                         .replace(/>/g, '&gt;')
                         .replace(/"/g, '&quot;')
                         .replace(/'/g, '&#39;');
-                    const metaTag = `  <meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">`;
+                    const metaTag = `  <meta http-equiv=\"Content-Security-Policy\" content=\"${escapeAttr(cspForMeta)}\">`;
 
                     if (/<meta[^>]+http-equiv=['"]Content-Security-Policy['"][^>]*>/i.test(html)) {
                         html = html.replace(/<meta[^>]+http-equiv=['"]Content-Security-Policy['"][^>]*>/i, metaTag);
