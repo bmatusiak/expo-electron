@@ -16,6 +16,7 @@
     "@electron-forge/publisher-github": "^7.10.2",
     "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.2",
-    "electron": "39.2.7"
+    "electron": "39.2.7",
+    "esbuild": "^0.20.2"
   }
 }

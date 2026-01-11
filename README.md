@@ -23,8 +23,14 @@ Deterministic packaging details
   - Root-absolute `src`/`href` attributes (for example paths starting with `/_expo/`) are rewritten to relative paths (`./_expo/...`).
 -- Packaging workspace: a minimal `package.json` and Forge config are created in `electron/.build`. The CLI always runs `electron-forge package` so packaging hooks and the packaged application are produced deterministically. The final step (`electron-forge make`) that creates distributables is only run when you explicitly pass `--make` to `npx expo-electron package` (see examples below).
 
+Main/preload bundling
+
+- During `npx expo-electron package`, the CLI bundles `electron/build/main/main.js` and `electron/build/main/preload.js` using `esbuild` so your main/preload dependencies are included in the packaged app without relying on `node_modules` inside the packaged workspace.
+- You can disable bundling with `EXPO_ELECTRON_NO_BUNDLE_MAIN=1` and/or `EXPO_ELECTRON_NO_BUNDLE_PRELOAD=1`.
 Package options
 
+
+Packaging copies those resources into the Forge workspace, but prunes native build outputs so only `*.node` files are copied from `build/Release` and `build/Debug`.
 
   - Run packaging only (no distributables):
 

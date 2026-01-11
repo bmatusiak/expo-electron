@@ -4,6 +4,97 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
+async function bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot }) {
+    // Allow disabling bundling for debugging/workarounds.
+    const disabled = String(process.env.EXPO_ELECTRON_NO_BUNDLE_MAIN || '').toLowerCase();
+    if (disabled === '1' || disabled === 'true' || disabled === 'yes') {
+        console.log('Packaging: skipping main bundling (EXPO_ELECTRON_NO_BUNDLE_MAIN set)');
+        return { bundled: false, entry: entryFile };
+    }
+
+    let esbuild;
+    try {
+        esbuild = require('esbuild');
+    } catch (e) {
+        console.error('Packaging: missing esbuild dependency in expo-electron.');
+        console.error('Install deps at project root (or re-install expo-electron): `npm install`');
+        throw e;
+    }
+
+    if (!fs.existsSync(entryFile)) {
+        throw new Error('Packaging: cannot bundle missing entry: ' + entryFile);
+    }
+
+    console.log('Packaging: bundling Electron main', entryFile, '->', outFile);
+    await esbuild.build({
+        entryPoints: [entryFile],
+        outfile: outFile,
+        bundle: true,
+        platform: 'node',
+        format: 'cjs',
+        target: ['node22'],
+        absWorkingDir: projectRoot,
+        logLevel: 'info',
+        sourcemap: false,
+        // Never bundle Electron itself or native addons.
+        external: ['electron', '*.node'],
+        // Keep runtime semantics similar to Node/Electron.
+        define: {
+            'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'production'),
+        },
+    });
+
+    return { bundled: true, entry: outFile };
+}
+
+async function bundleElectronPreloadIfNeeded({ entryFile, bundleOutFile, wrapperFile, projectRoot }) {
+    // Allow disabling bundling for debugging/workarounds.
+    const disabled = String(process.env.EXPO_ELECTRON_NO_BUNDLE_PRELOAD || '').toLowerCase();
+    if (disabled === '1' || disabled === 'true' || disabled === 'yes') {
+        console.log('Packaging: skipping preload bundling (EXPO_ELECTRON_NO_BUNDLE_PRELOAD set)');
+        return { bundled: false, entry: entryFile };
+    }
+
+    let esbuild;
+    try {
+        esbuild = require('esbuild');
+    } catch (e) {
+        console.error('Packaging: missing esbuild dependency in expo-electron.');
+        console.error('Install deps at project root (or re-install expo-electron): `npm install`');
+        throw e;
+    }
+
+    if (!fs.existsSync(entryFile)) {
+        throw new Error('Packaging: cannot bundle missing preload entry: ' + entryFile);
+    }
+
+    console.log('Packaging: bundling Electron preload', entryFile, '->', bundleOutFile);
+    await esbuild.build({
+        entryPoints: [entryFile],
+        outfile: bundleOutFile,
+        bundle: true,
+        platform: 'node',
+        format: 'cjs',
+        target: ['node22'],
+        absWorkingDir: projectRoot,
+        logLevel: 'info',
+        sourcemap: false,
+        // Never bundle Electron itself or native addons.
+        external: ['electron', '*.node'],
+        define: {
+            'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'production'),
+        },
+    });
+
+    // Keep BrowserWindow preload path stable by swapping preload.js for a wrapper.
+    if (wrapperFile) {
+        const rel = './' + path.basename(bundleOutFile).replace(/\\/g, '/');
+        fs.writeFileSync(wrapperFile, `require('${rel}');\n`, 'utf8');
+    }
+
+    return { bundled: true, entry: bundleOutFile };
+}
+
 // Determine project root: walk upwards until we find a package.json whose
 // `name` differs from this package (expo-electron). This allows the package
 // to be installed under `node_modules` or `sub_modules` during development.
@@ -110,6 +201,52 @@ function copyRecursiveSkipExisting(src, dest, skipFiles = []) {
         if (fs.existsSync(dest)) {
             console.log('Prebuild: skipping existing', dest);
         } else {
+            fs.copyFileSync(src, dest);
+            console.log('Prebuild: copied', dest);
+        }
+    }
+}
+
+function copyRecursiveFilteredSkipExisting(src, dest, filterFn) {
+    const stat = fs.statSync(src);
+    if (stat.isDirectory()) {
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        for (const entry of fs.readdirSync(src)) {
+            const s = path.join(src, entry);
+            const d = path.join(dest, entry);
+            const st = fs.statSync(s);
+
+            if (st.isDirectory()) {
+                if (fs.existsSync(d)) {
+                    const dstStat = fs.statSync(d);
+                    if (dstStat.isDirectory()) {
+                        copyRecursiveFilteredSkipExisting(s, d, filterFn);
+                    } else {
+                        console.log('Prebuild: skipping existing', d);
+                    }
+                } else {
+                    copyRecursiveFilteredSkipExisting(s, d, filterFn);
+                }
+                continue;
+            }
+
+            if (typeof filterFn === 'function' && !filterFn(s, d)) continue;
+            if (fs.existsSync(d)) {
+                console.log('Prebuild: skipping existing', d);
+            } else {
+                const dpar = path.dirname(d);
+                if (!fs.existsSync(dpar)) fs.mkdirSync(dpar, { recursive: true });
+                fs.copyFileSync(s, d);
+                console.log('Prebuild: copied', d);
+            }
+        }
+    } else if (stat.isFile()) {
+        if (typeof filterFn === 'function' && !filterFn(src, dest)) return;
+        if (fs.existsSync(dest)) {
+            console.log('Prebuild: skipping existing', dest);
+        } else {
+            const dpar = path.dirname(dest);
+            if (!fs.existsSync(dpar)) fs.mkdirSync(dpar, { recursive: true });
             fs.copyFileSync(src, dest);
             console.log('Prebuild: copied', dest);
         }
@@ -464,6 +601,35 @@ async function pack(makeMakers) {
             copyRecursiveSkipExisting(projectMain, workMain);
         }
 
+        // Bundle Electron preload script so its dependencies are included
+        // in the packaged app without relying on packaged node_modules.
+        try {
+            const preloadEntry = path.join(workMain, 'preload.js');
+            const preloadBundleOut = path.join(workMain, 'preload.bundle.cjs');
+            await bundleElectronPreloadIfNeeded({
+                entryFile: preloadEntry,
+                bundleOutFile: preloadBundleOut,
+                wrapperFile: preloadEntry,
+                projectRoot: PROJECT_ROOT,
+            });
+        } catch (e) {
+            console.error('Packaging: failed to bundle Electron preload:', e && e.message);
+            process.exit(6);
+        }
+
+        // Bundle Electron main process entry so runtime dependencies are included
+        // in the packaged app without needing workspace node_modules.
+        let bundledMainPath = null;
+        try {
+            const entryFile = path.join(workMain, 'main.js');
+            const outFile = path.join(workMain, 'main.bundle.cjs');
+            const bundleResult = await bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot: PROJECT_ROOT });
+            if (bundleResult && bundleResult.bundled) bundledMainPath = 'main/main.bundle.cjs';
+        } catch (e) {
+            console.error('Packaging: failed to bundle Electron main:', e && e.message);
+            process.exit(6);
+        }
+
         // Copy any autolink-generated electron resources into the packaging
         // workspace so native files (and electron/ folders from modules) are
         // available to the packager. The autolinker writes an
@@ -473,6 +639,7 @@ async function pack(makeMakers) {
             const resourcesPath = path.join(target, 'electron-resources.json');
             if (fs.existsSync(resourcesPath)) {
                 const resources = JSON.parse(fs.readFileSync(resourcesPath, 'utf8')) || [];
+                const strictNativeOnly = ['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_COPY_NATIVE_ONLY || '').toLowerCase());
                 for (const r of resources) {
                     try {
                         // source is project-root relative
@@ -485,8 +652,18 @@ async function pack(makeMakers) {
                         // Ensure destination parent exists
                         const dpar = path.dirname(dest);
                         if (!fs.existsSync(dpar)) fs.mkdirSync(dpar, { recursive: true });
-                        // Copy resource (preserve directories)
-                        copyRecursiveSkipExisting(src, dest);
+                        // Copy resource (preserve directories) while pruning non-.node
+                        // artifacts from native build outputs. Set EXPO_ELECTRON_COPY_NATIVE_ONLY=1
+                        // to copy ONLY .node files from all resources.
+                        const srcNorm = String(r.from || '').replace(/\\/g, '/');
+                        const isNativeBuildDir = srcNorm.includes('/build/Release') || srcNorm.includes('/build/Debug');
+                        const filterFn = (s) => {
+                            const ext = path.extname(String(s)).toLowerCase();
+                            if (strictNativeOnly) return ext === '.node';
+                            if (isNativeBuildDir) return ext === '.node';
+                            return true;
+                        };
+                        copyRecursiveFilteredSkipExisting(src, dest, filterFn);
                         console.log('Packaging: copied autolink resource', src, '->', dest);
                     } catch (e) {
                         console.warn('Packaging: failed to copy autolink resource', e && e.message);
@@ -516,7 +693,7 @@ async function pack(makeMakers) {
             version: projectPkg.version || '1.0.0',
             description: projectPkg.description || projectPkg.productName || projectPkg.name || 'Expo Electron App',
             author: projectPkg.author,
-            main: 'main/main.js',
+            main: bundledMainPath || 'main/main.js',
             devDependencies: projectPkg.devDependencies || { "electron": "*" },
         };
         // Inject a sensible default Forge config so `electron-forge make` has
