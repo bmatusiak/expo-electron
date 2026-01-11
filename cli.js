@@ -566,6 +566,49 @@ async function pack(makeMakers) {
                 // to relative references so file:// loads work. Only targets attribute patterns
                 // to avoid touching protocol URLs.
                 html = html.replace(/(\b(?:src|href)\s*=\s*['"])\//gi, '$1./');
+
+                // Inject CSP for packaged builds (meta tag works for file://).
+                // Can be disabled with EXPO_ELECTRON_NO_CSP=1 or overridden with EXPO_ELECTRON_CSP.
+                const disableCsp = ['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_NO_CSP || '').toLowerCase());
+                if (!disableCsp) {
+                    const hasInlineScript = /<script(?![^>]*\bsrc\s*=)[^>]*>/i.test(html);
+                    const defaultCsp = [
+                        "default-src 'self'",
+                        "base-uri 'self'",
+                        "object-src 'none'",
+                        "frame-ancestors 'none'",
+                        "form-action 'self'",
+                        "img-src 'self' data: blob:",
+                        "font-src 'self' data:",
+                        "style-src 'self' 'unsafe-inline'",
+                        hasInlineScript ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
+                        "connect-src 'self' https: wss:",
+                    ].join('; ');
+                    const csp = String(process.env.EXPO_ELECTRON_CSP || defaultCsp);
+                    const escapeAttr = (s) => String(s)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;');
+                    const metaTag = `  <meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">`;
+
+                    if (/<meta[^>]+http-equiv=['"]Content-Security-Policy['"][^>]*>/i.test(html)) {
+                        html = html.replace(/<meta[^>]+http-equiv=['"]Content-Security-Policy['"][^>]*>/i, metaTag);
+                    } else {
+                        const headIndex = html.indexOf('<head>');
+                        if (headIndex !== -1) {
+                            const insertAt = headIndex + '<head>'.length;
+                            html = html.slice(0, insertAt) + '\n' + metaTag + html.slice(insertAt);
+                        } else if (html.includes('</head>')) {
+                            html = html.replace('</head>', metaTag + '\n</head>');
+                        } else {
+                            // If no <head> is present, just prefix.
+                            html = metaTag + '\n' + html;
+                        }
+                    }
+                }
+
                 fs.writeFileSync(indexPath, html, 'utf8');
                 console.log('Post-export: fixed asset paths and ensured base href in', indexPath);
             }
@@ -708,6 +751,10 @@ async function pack(makeMakers) {
                 // a boolean or an object (e.g. `{ unpack: '...' }`). `asarUnpack` is an
                 // electron-builder option and will be ignored here.
                 asar: {
+                    // Unpack the entire native/ tree so native binaries are not stored
+                    // inside app.asar at all (avoids any perceived duplication).
+                    unpackDir: 'native',
+                    // Redundant safety: also match any stray .node files.
                     unpack: '**/*.node',
                 },
                 // Opt-in to the old behavior (expose native JS outside ASAR) by setting:
