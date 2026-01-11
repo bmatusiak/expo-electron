@@ -703,9 +703,13 @@ async function pack(makeMakers) {
         // makers and packager settings to run deterministically.
         const defaultForgeConfig = {
             packagerConfig: {
-                asar: true,
-                asarUnpack: ['**/*.node'],
-                // Default: keep JS inside app.asar, and rely on asarUnpack for *.node.
+                // Keep JS inside app.asar, but unpack native addons so Node can dlopen them.
+                // NOTE: Electron Forge uses electron-packager, which expects `asar` to be
+                // a boolean or an object (e.g. `{ unpack: '...' }`). `asarUnpack` is an
+                // electron-builder option and will be ignored here.
+                asar: {
+                    unpack: '**/*.node',
+                },
                 // Opt-in to the old behavior (expose native JS outside ASAR) by setting:
                 //   EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE=1
             },
