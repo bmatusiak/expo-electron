@@ -47,7 +47,7 @@ async function bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot }) {
     return { bundled: true, entry: outFile };
 }
 
-async function bundleElectronPreloadIfNeeded({ entryFile, bundleOutFile, wrapperFile, projectRoot }) {
+async function bundleElectronPreloadIfNeeded({ entryFile, outFile, projectRoot }) {
     // Allow disabling bundling for debugging/workarounds.
     const disabled = String(process.env.EXPO_ELECTRON_NO_BUNDLE_PRELOAD || '').toLowerCase();
     if (disabled === '1' || disabled === 'true' || disabled === 'yes') {
@@ -68,10 +68,10 @@ async function bundleElectronPreloadIfNeeded({ entryFile, bundleOutFile, wrapper
         throw new Error('Packaging: cannot bundle missing preload entry: ' + entryFile);
     }
 
-    console.log('Packaging: bundling Electron preload', entryFile, '->', bundleOutFile);
+    console.log('Packaging: bundling Electron preload', entryFile, '->', outFile);
     await esbuild.build({
         entryPoints: [entryFile],
-        outfile: bundleOutFile,
+        outfile: outFile,
         bundle: true,
         platform: 'node',
         format: 'cjs',
@@ -86,13 +86,7 @@ async function bundleElectronPreloadIfNeeded({ entryFile, bundleOutFile, wrapper
         },
     });
 
-    // Keep BrowserWindow preload path stable by swapping preload.js for a wrapper.
-    if (wrapperFile) {
-        const rel = './' + path.basename(bundleOutFile).replace(/\\/g, '/');
-        fs.writeFileSync(wrapperFile, `require('${rel}');\n`, 'utf8');
-    }
-
-    return { bundled: true, entry: bundleOutFile };
+    return { bundled: true, entry: outFile };
 }
 
 // Determine project root: walk upwards until we find a package.json whose
@@ -608,13 +602,12 @@ async function pack(makeMakers) {
         // in the packaged app without relying on packaged node_modules.
         try {
             const preloadEntry = path.join(workMain, 'preload.js');
-            const preloadBundleOut = path.join(workMain, 'preload.bundle.cjs');
-            await bundleElectronPreloadIfNeeded({
-                entryFile: preloadEntry,
-                bundleOutFile: preloadBundleOut,
-                wrapperFile: preloadEntry,
-                projectRoot: PROJECT_ROOT,
-            });
+            const preloadTempOut = path.join(workMain, 'preload.bundle.cjs');
+            const bundleResult = await bundleElectronPreloadIfNeeded({ entryFile: preloadEntry, outFile: preloadTempOut, projectRoot: PROJECT_ROOT });
+            if (bundleResult && bundleResult.bundled) {
+                fs.copyFileSync(preloadTempOut, preloadEntry);
+                try { fs.unlinkSync(preloadTempOut); } catch (e) { }
+            }
         } catch (e) {
             console.error('Packaging: failed to bundle Electron preload:', e && e.message);
             process.exit(6);
@@ -627,7 +620,12 @@ async function pack(makeMakers) {
             const entryFile = path.join(workMain, 'main.js');
             const outFile = path.join(workMain, 'main.bundle.cjs');
             const bundleResult = await bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot: PROJECT_ROOT });
-            if (bundleResult && bundleResult.bundled) bundledMainPath = 'main/main.bundle.cjs';
+            if (bundleResult && bundleResult.bundled) {
+                bundledMainPath = 'main/main.bundle.cjs';
+                // Overwrite main.js with the bundled output and remove the intermediate.
+                fs.copyFileSync(outFile, entryFile);
+                try { fs.unlinkSync(outFile); } catch (e) { }
+            }
         } catch (e) {
             console.error('Packaging: failed to bundle Electron main:', e && e.message);
             process.exit(6);
@@ -696,7 +694,9 @@ async function pack(makeMakers) {
             version: projectPkg.version || '1.0.0',
             description: projectPkg.description || projectPkg.productName || projectPkg.name || 'Expo Electron App',
             author: projectPkg.author,
-            main: bundledMainPath || 'main/main.js',
+            // Always point at main/main.js. When bundling is enabled, this file
+            // is overwritten with the bundled output.
+            main: 'main/main.js',
             devDependencies: projectPkg.devDependencies || { "electron": "*" },
         };
         // Inject a sensible default Forge config so `electron-forge make` has
