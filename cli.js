@@ -503,7 +503,8 @@ async function pack(makeMakers) {
     // Build web into the project's prebuild `electron/build` folder so
     // packaging uses the editable prebuilt electron folder but keeps the
     // static build separate from editable sources.
-    const appOut = path.join(target, 'build');
+    const buildDirName = String(process.env.EXPO_ELECTRON_BUILD_DIR || 'build');
+    const appOut = path.resolve(target, buildDirName);
     if (fs.existsSync(appOut)) {
         console.log('Removing existing build workspace at', appOut);
         try {
@@ -761,19 +762,13 @@ async function pack(makeMakers) {
         // makers and packager settings to run deterministically.
         const defaultForgeConfig = {
             packagerConfig: {
-                // Keep JS inside app.asar, but unpack native addons so Node can dlopen them.
-                // NOTE: Electron Forge uses electron-packager, which expects `asar` to be
-                // a boolean or an object (e.g. `{ unpack: '...' }`). `asarUnpack` is an
-                // electron-builder option and will be ignored here.
-                asar: {
-                    // Unpack the entire native/ tree so native binaries are not stored
-                    // inside app.asar at all (avoids any perceived duplication).
-                    unpackDir: 'native',
-                    // Redundant safety: also match any stray .node files.
-                    unpack: '**/*.node',
-                },
-                // Opt-in to the old behavior (expose native JS outside ASAR) by setting:
-                //   EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE=1
+                // Keep JS inside app.asar, but ship native addons OUTSIDE the asar
+                // using extraResource. This avoids app.asar.unpacked entirely and
+                // ensures only one physical copy exists on disk.
+                asar: true,
+                // Exclude native/ from the app bundle (so it does not appear in app.asar)
+                // and copy it as a resource instead.
+                ignore: ['^/native($|/)'],
             },
             makers: [
                 { name: '@electron-forge/maker-squirrel', config: {} },
@@ -783,9 +778,11 @@ async function pack(makeMakers) {
             ]
         };
 
-        if (['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE || '').toLowerCase())) {
+        const disableExtraNative = ['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE || '').toLowerCase());
+        if (!disableExtraNative) {
             defaultForgeConfig.packagerConfig.extraResource = ['native'];
-            console.log('Packaging: EXPO_ELECTRON_EXTRA_RESOURCE_NATIVE set; native resources will be copied outside ASAR');
+        } else {
+            console.log('Packaging: EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE set; native will not be copied as extraResource');
         }
         // Only run `make` when the user explicitly requested makers via
         // `--make`. If no `--make` was provided, skip the making step and
