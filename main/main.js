@@ -92,26 +92,28 @@ function createWindow() {
 
 // electron-squirrel-startup is only needed for Squirrel.Windows install/uninstall events.
 let isSquirrelStartup = !!require('electron-squirrel-startup');
-if (isSquirrelStartup) app.quit();
+if (isSquirrelStartup) {
+    app.quit();
+} else {
+    app.whenReady().then(() => {
+        installCspHeaders();
+        createWindow();
 
-app.whenReady().then(() => {
-    installCspHeaders();
-    createWindow();
-
-    if (process.env.NODE_ENV === 'development') {
-        try {
-            const watchDir = path.join(__dirname);
-            fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
-                if (!filename) return;
-                if (mainWindow && mainWindow.webContents) {
-                    mainWindow.webContents.send('main-changed', { event: eventType, file: filename });
-                }
-            });
-        } catch (e) {
-            console.warn('watcher failed', e && e.message);
+        if (process.env.NODE_ENV === 'development') {
+            try {
+                const watchDir = path.join(__dirname);
+                fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
+                    if (!filename) return;
+                    if (mainWindow && mainWindow.webContents) {
+                        mainWindow.webContents.send('main-changed', { event: eventType, file: filename });
+                    }
+                });
+            } catch (e) {
+                console.warn('watcher failed', e && e.message);
+            }
         }
-    }
-});
+    });
+}
 
 ipcMain.handle('restart-main', async () => {
     try {
