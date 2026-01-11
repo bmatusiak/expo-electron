@@ -36,17 +36,15 @@ Build / workspace locations
 
 Environment variables
 
-| Variable | Used by | Default | Purpose |
-|---|---|---:|---|
-| `EXPO_WEB_URL` | `start`, `main/main.js` | `http://localhost:8081` | Dev server URL Electron should load in development. |
-| `EXPO_PRELOAD_PATH` | `main/main.js` | `electron/main/preload.js` (when launched by `start`) | Absolute/relative path to the preload script to use at runtime. |
-| `EXPO_ELECTRON_BUILD_DIR` | `package` | `build` | Folder name under `electron/` used as the packaging workspace (e.g. `electron/build`). |
-| `EXPO_ELECTRON_NO_BUNDLE_MAIN` | `package` | unset | Disable `esbuild` bundling of `main/main.js` (`1`/`true`/`yes`). |
-| `EXPO_ELECTRON_NO_BUNDLE_PRELOAD` | `package` | unset | Disable `esbuild` bundling of `main/preload.js` (`1`/`true`/`yes`). |
-| `EXPO_ELECTRON_NO_CSP` | `package`, `main/main.js` | unset | Disable CSP injection (export-time meta tag) and runtime CSP header install (`1`/`true`/`yes`). |
-| `EXPO_ELECTRON_CSP` | `package`, `main/main.js` | unset | Override the Content Security Policy string. |
-| `EXPO_ELECTRON_COPY_NATIVE_ONLY` | `package` | unset | Copy only `*.node` files from all autolink resources (`1`/`true`/`yes`). |
-| `EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE` | `package` | unset | Do not ship `native/` as a Forge `extraResource` (`1`/`true`/`yes`). |
+- `EXPO_WEB_URL` (default: `http://localhost:8081`) — dev server URL Electron should load in development (used by `start` and `main/main.js`).
+- `EXPO_PRELOAD_PATH` (default: `electron/main/preload.js` when launched by `start`) — path to the preload script used at runtime (used by `main/main.js`).
+- `EXPO_ELECTRON_BUILD_DIR` (default: `build`) — folder name under `electron/` used as the packaging workspace (used by `package`).
+- `EXPO_ELECTRON_NO_BUNDLE_MAIN` — disable `esbuild` bundling of `main/main.js` (set to `1`/`true`/`yes`).
+- `EXPO_ELECTRON_NO_BUNDLE_PRELOAD` — disable `esbuild` bundling of `main/preload.js` (set to `1`/`true`/`yes`).
+- `EXPO_ELECTRON_NO_CSP` — disable CSP injection (export-time meta tag) and runtime CSP header install (set to `1`/`true`/`yes`).
+- `EXPO_ELECTRON_CSP` — override the Content Security Policy string.
+- `EXPO_ELECTRON_COPY_NATIVE_ONLY` — copy only `*.node` files from all autolink resources (set to `1`/`true`/`yes`).
+- `EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE` — do not ship `native/` as a Forge `extraResource` (set to `1`/`true`/`yes`).
 
 Deterministic packaging details
 
