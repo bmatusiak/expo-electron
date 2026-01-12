@@ -4,6 +4,8 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
+const { readExpoProtocols, setupLinuxTempDesktopProtocolHandlers } = require('./lib/deeplinks');
+
 async function bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot }) {
     // Allow disabling bundling for debugging/workarounds.
     const disabled = String(process.env.EXPO_ELECTRON_NO_BUNDLE_MAIN || '').toLowerCase();
@@ -325,20 +327,6 @@ function spawnElectron(cwd, resolvedUrl) {
     console.log('Launching Electron in', cwd);
     const preloadPath = path.join(cwd, 'main', 'preload.js');
 
-    function readExpoProtocols(projectRoot) {
-        try {
-            const appJson = path.join(projectRoot, 'app.json');
-            if (!fs.existsSync(appJson)) return [];
-            const cfg = JSON.parse(fs.readFileSync(appJson, 'utf8'));
-            const expo = (cfg || {}).expo || {};
-            if (typeof expo.scheme === 'string' && expo.scheme.trim()) return [expo.scheme.trim()];
-            if (Array.isArray(expo.schemes)) return expo.schemes;
-            return [];
-        } catch (e) {
-            return [];
-        }
-    }
-
     const protocols = readExpoProtocols(PROJECT_ROOT)
         .map((s) => String(s || '').trim())
         .filter(Boolean);
@@ -391,6 +379,21 @@ async function start() {
     const projectElectron = path.join(PROJECT_ROOT, 'electron');
     const cwd = fs.existsSync(projectElectron) ? projectElectron : path.join(__dirname);
     console.log('Using Electron working directory:', cwd);
+
+    // Linux dev helper: temporarily register x-scheme-handler defaults via a
+    // generated .desktop file, and remove/restore defaults when dev stops.
+    const protocols = readExpoProtocols(PROJECT_ROOT)
+        .map((s) => String(s || '').trim())
+        .filter(Boolean);
+    const electronEntry = path.join(cwd, 'main', 'main.js');
+    const linuxTempDesktop = setupLinuxTempDesktopProtocolHandlers({
+        projectRoot: PROJECT_ROOT,
+        electronCmd: ELECTRON_CMD,
+        electronEntry,
+        electronCwd: cwd,
+        protocols,
+    });
+
     const electronProc = spawnElectron(cwd);
 
     // Centralized shutdown handling
@@ -411,6 +414,7 @@ async function start() {
         if (finalized) return;
         finalized = true;
         if (livenessInterval) { clearInterval(livenessInterval); livenessInterval = null; }
+        try { linuxTempDesktop.cleanup(); } catch (e) { }
         process.exit(typeof code === 'number' ? code : 0);
     }
 

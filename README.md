@@ -45,6 +45,7 @@ Environment variables
 - `EXPO_ELECTRON_CSP` — override the Content Security Policy string.
 - `EXPO_ELECTRON_PROTOCOLS` (or `EXPO_ELECTRON_PROTOCOL`) — comma-separated list of URL schemes to register (example: `myapp,myapp-dev`).
 - `EXPO_ELECTRON_NO_SINGLE_INSTANCE` — disable single-instance behavior (Windows/Linux deep linking relies on single-instance handoff).
+- `EXPO_ELECTRON_LINUX_NO_TEMP_DESKTOP` — (Linux dev only) disable temporary `.desktop` registration during `expo-electron start`.
 - `EXPO_ELECTRON_COPY_NATIVE_ONLY` — copy only `*.node` files from all autolink resources (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE` — do not ship `native/` as a Forge `extraResource` (set to `1`/`true`/`yes`).
 
@@ -53,6 +54,12 @@ Deep linking (URL schemes)
 - Main process: `main/main.js` registers protocols (via `app.setAsDefaultProtocolClient`), captures incoming URLs (`open-url` on macOS, `second-instance` argv on Windows/Linux), and forwards them to the renderer with IPC channel `on-deep-link`.
 - Preload: the autolinker generates a `window.electron.onDeepLink((url) => ...)` helper that strips the Electron IPC event object and only passes the URL string.
 - Configuration: `expo.scheme` (or `expo.schemes`) from `app.json` is used when available; packaged builds also embed the configured scheme(s) into the generated packaging workspace `package.json` under `expoElectron.protocols`.
+
+Linux dev flow notes
+
+- During `npx expo-electron start` on Linux, the CLI creates a temporary `.desktop` file under `~/.local/share/applications/` and uses `xdg-mime` to set `x-scheme-handler/<scheme>` defaults for the configured Expo schemes.
+- When the dev processes exit (or on SIGINT/SIGTERM), the `.desktop` file is removed and previous `xdg-mime` defaults are restored (best-effort).
+- Opt out with `EXPO_ELECTRON_LINUX_NO_TEMP_DESKTOP=1`.
 
 Desktop bridge (dialogs, clipboard, theme, shell)
 
