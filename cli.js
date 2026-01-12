@@ -120,6 +120,7 @@ const ROOT_NODE_BIN = path.join(PROJECT_ROOT, 'node_modules', '.bin');
 
 const EXPO_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'expo.cmd' : 'expo');
 const ELECTRON_CMD = path.join(ROOT_NODE_BIN, process.platform === 'win32' ? 'electron.cmd' : 'electron');
+const NPM_CMD = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const POLL_INTERVAL = 500;
@@ -281,6 +282,98 @@ function runCommand(cmdPath, args, options = {}) {
     });
 }
 
+function readJsonIfExists(p) {
+    try {
+        if (!fs.existsSync(p)) return null;
+        return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch (e) {
+        return null;
+    }
+}
+
+function listTopLevelDependencies(projectRoot) {
+    const pkgPath = path.join(projectRoot, 'package.json');
+    const pkg = readJsonIfExists(pkgPath) || {};
+    const deps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
+    return Object.keys(deps || {});
+}
+
+function findAutolinkableModuleRoots(projectRoot) {
+    // Mirror the autolinker behavior: only consider top-level declared deps,
+    // and only those that have an `electron/` entrypoint.
+    const names = listTopLevelDependencies(projectRoot);
+    const results = [];
+    for (const name of names) {
+        const modRoot = path.join(projectRoot, 'node_modules', name);
+        try {
+            const st = fs.statSync(modRoot);
+            if (!st.isDirectory()) continue;
+        } catch (e) {
+            continue;
+        }
+        const electronDir = path.join(modRoot, 'electron');
+        const electronIndex = path.join(electronDir, 'index.js');
+        if (!fs.existsSync(electronDir) || !fs.existsSync(electronIndex)) continue;
+        results.push({ name, modRoot, electronDir });
+    }
+    return results;
+}
+
+function getBuildWorkspacesForModule(modRoot) {
+    // Prefer `electron/package.json` if it defines a build script.
+    const candidates = [];
+    const electronPkgPath = path.join(modRoot, 'electron', 'package.json');
+    const electronPkg = readJsonIfExists(electronPkgPath);
+    if (electronPkg && electronPkg.scripts && typeof electronPkg.scripts.build === 'string' && electronPkg.scripts.build.trim()) {
+        candidates.push(path.dirname(electronPkgPath));
+    }
+    const rootPkgPath = path.join(modRoot, 'package.json');
+    const rootPkg = readJsonIfExists(rootPkgPath);
+    if (rootPkg && rootPkg.scripts && typeof rootPkg.scripts.build === 'string' && rootPkg.scripts.build.trim()) {
+        candidates.push(path.dirname(rootPkgPath));
+    }
+    // Deduplicate
+    return Array.from(new Set(candidates));
+}
+
+async function buildElectronNativeModules(projectRoot) {
+    const disabled = String(process.env.EXPO_ELECTRON_NO_NATIVE_BUILD || '').toLowerCase();
+    if (disabled === '1' || disabled === 'true' || disabled === 'yes') {
+        console.log('Native build: skipping (EXPO_ELECTRON_NO_NATIVE_BUILD set)');
+        return;
+    }
+
+    if (!commandExistsInPath(NPM_CMD)) {
+        console.warn('Native build: npm not found in PATH; skipping native module builds.');
+        return;
+    }
+
+    const mods = findAutolinkableModuleRoots(projectRoot);
+    if (!mods.length) {
+        console.log('Native build: no autolinkable electron modules found');
+        return;
+    }
+
+    const buildTargets = [];
+    for (const m of mods) {
+        const workspaces = getBuildWorkspacesForModule(m.modRoot);
+        for (const cwd of workspaces) {
+            buildTargets.push({ name: m.name, cwd });
+        }
+    }
+
+    if (!buildTargets.length) {
+        console.log('Native build: no build scripts found in electron modules');
+        return;
+    }
+
+    console.log('Native build: building', buildTargets.length, 'module workspace(s)');
+    for (const t of buildTargets) {
+        console.log('Native build: npm run build in', t.cwd, `(module: ${t.name})`);
+        await runCommand(NPM_CMD, ['run', 'build'], { cwd: t.cwd });
+    }
+}
+
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -360,13 +453,9 @@ async function start() {
         prebuild();
         const projectElectron = path.join(PROJECT_ROOT, 'electron');
         const autolink = require(path.join(__dirname, 'lib', 'autolink'));
-        // Rebuild native modules in the project before autolink so any
-        // native source changes are compiled and available to autolinker.
-        try {
-            await runCommand('npm', ['rebuild'], { cwd: PROJECT_ROOT });
-        } catch (e) {
-            console.warn('npm rebuild failed:', e && e.message);
-        }
+        // Build native electron modules (per-module `npm run build`) before autolink
+        // so compiled .node artifacts exist for preload + packaging resources.
+        await buildElectronNativeModules(PROJECT_ROOT);
         autolink.run(PROJECT_ROOT, projectElectron);
     } catch (e) {
         console.warn('Autolink/prebuild failed:', e && e.message);
@@ -526,6 +615,9 @@ async function pack(makeMakers) {
         // Run prebuild first to create the editable electron folder, then autolink into it
         prebuild();
         const projectElectron = path.join(PROJECT_ROOT, 'electron');
+        // Ensure native electron modules are built so .node artifacts exist
+        // for autolink resource copying.
+        await buildElectronNativeModules(PROJECT_ROOT);
         try {
             const autolink = require(path.join(__dirname, 'lib', 'autolink'));
             autolink.run(PROJECT_ROOT, projectElectron);
