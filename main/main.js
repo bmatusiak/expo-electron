@@ -1,15 +1,19 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, nativeTheme, clipboard, dialog, shell, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const { createDeepLinkBridge } = require('./deeplinks');
 const { installCspHeaders } = require('./csp');
+const { createDesktopBridge } = require('./desktop');
 
 let mainWindow;
 const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const PROD_INDEX = path.join(__dirname, '..', 'app', 'index.html');
 
 const deepLinks = createDeepLinkBridge({ app });
+const desktop = createDesktopBridge({ app, ipcMain, nativeTheme, clipboard, dialog, shell, powerMonitor });
+
+desktop.registerIpcHandlers();
 
 function createWindow() {
     const preloadPath = process.env.EXPO_PRELOAD_PATH ? path.resolve(process.env.EXPO_PRELOAD_PATH) : path.join(__dirname, 'preload.js');
@@ -24,6 +28,7 @@ function createWindow() {
         },
     });
     deepLinks.setMainWindow(mainWindow);
+    desktop.setMainWindow(mainWindow);
 
     // Determine whether a production index exists in the packaged app.
     // If the production index is present we prefer it (packaged apps should
@@ -57,6 +62,7 @@ if (isSquirrelStartup) {
         deepLinks.registerProtocols();
         installCspHeaders({ session });
         createWindow();
+        desktop.startEventForwarding();
 
         if (process.env.NODE_ENV === 'development') {
             try {

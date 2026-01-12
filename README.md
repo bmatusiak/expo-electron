@@ -54,6 +54,23 @@ Deep linking (URL schemes)
 - Preload: the autolinker generates a `window.electron.onDeepLink((url) => ...)` helper that strips the Electron IPC event object and only passes the URL string.
 - Configuration: `expo.scheme` (or `expo.schemes`) from `app.json` is used when available; packaged builds also embed the configured scheme(s) into the generated packaging workspace `package.json` under `expoElectron.protocols`.
 
+Desktop bridge (dialogs, clipboard, theme, shell)
+
+- Main process: `main/desktop.js` registers a small set of safe IPC handlers (file open/save dialogs, clipboard text, theme getters/setters, and a few `shell` helpers).
+- Preload: the autolinker exposes convenience methods on `window.electron` that call `ipcRenderer.invoke` through a strict allowlist.
+
+Exposed renderer APIs (when running under Electron)
+
+- `window.electron.openFileDialog(options)` -> `dialog.showOpenDialog`
+- `window.electron.saveFileDialog(options)` -> `dialog.showSaveDialog`
+- `window.electron.readClipboardText()` / `window.electron.writeClipboardText(text)`
+- `window.electron.getTheme()` / `window.electron.setThemeSource('system'|'light'|'dark')`
+- `window.electron.onThemeChanged((payload) => ...)` (payload includes `shouldUseDarkColors`, `themeSource`)
+- `window.electron.onPowerEvent((payload) => ...)` (payload includes `type`)
+- `window.electron.openExternal(url)` (restricted to `https://`, `http://`, `mailto:`)
+- `window.electron.showItemInFolder(filePath)` (requires the path to exist)
+- `window.electron.getPath(name)` (restricted subset of `app.getPath` keys)
+
 Deterministic packaging details
 
 - Web export: uses the installed Expo CLI's `export` command; if `export` is not available it fails loudly rather than guessing alternatives.

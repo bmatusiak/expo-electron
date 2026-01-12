@@ -279,6 +279,29 @@ function runCommand(cmdPath, args, options = {}) {
     });
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function copyFileWithRetries(src, dest, { retries = 12, delayMs = 40 } = {}) {
+    let lastErr = null;
+    for (let i = 0; i <= retries; i++) {
+        try {
+            fs.copyFileSync(src, dest);
+            return true;
+        } catch (e) {
+            lastErr = e;
+            const code = (e && e.code) || '';
+            // Common transient errors on Windows when AV/indexers lock files.
+            const transient = ['EBUSY', 'EPERM', 'EACCES'].includes(String(code));
+            if (!transient || i === retries) break;
+            await sleep(delayMs * Math.max(1, i + 1));
+        }
+    }
+    if (lastErr) throw lastErr;
+    return false;
+}
+
 function spawnExpoWeb() {
     // Build env without CI so Metro hot-reload remains enabled
     const env = Object.assign({}, process.env);
@@ -685,7 +708,7 @@ async function pack(makeMakers) {
             const preloadTempOut = path.join(workMain, 'preload.bundle.cjs');
             const bundleResult = await bundleElectronPreloadIfNeeded({ entryFile: preloadEntry, outFile: preloadTempOut, projectRoot: PROJECT_ROOT });
             if (bundleResult && bundleResult.bundled) {
-                fs.copyFileSync(preloadTempOut, preloadEntry);
+                await copyFileWithRetries(preloadTempOut, preloadEntry);
                 try { fs.unlinkSync(preloadTempOut); } catch (e) { }
             }
         } catch (e) {
@@ -703,7 +726,7 @@ async function pack(makeMakers) {
             if (bundleResult && bundleResult.bundled) {
                 bundledMainPath = 'main/main.bundle.cjs';
                 // Overwrite main.js with the bundled output and remove the intermediate.
-                fs.copyFileSync(outFile, entryFile);
+                await copyFileWithRetries(outFile, entryFile);
                 try { fs.unlinkSync(outFile); } catch (e) { }
             }
         } catch (e) {
