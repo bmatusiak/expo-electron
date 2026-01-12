@@ -78,6 +78,42 @@ Exposed renderer APIs (when running under Electron)
 - `window.electron.showItemInFolder(filePath)` (requires the path to exist)
 - `window.electron.getPath(name)` (restricted subset of `app.getPath` keys)
 
+Renderer helper (recommended)
+
+The `expo-electron` package also exposes a small **renderer-side helper API** from its main entrypoint. This is optional, but it keeps app code tidy by:
+
+- detecting whether you are running under Electron,
+- safely loading autolinked native modules, and
+- providing wrappers for the `window.electron.*` desktop APIs.
+
+Usage:
+
+```js
+import * as ExpoElectron from 'expo-electron';
+
+const electron = ExpoElectron.getElectronBridge();
+const isElectron = ExpoElectron.isElectron();
+
+// Desktop API wrapper (throws a clear error if not in Electron)
+const desktop = ExpoElectron.createDesktopApi(electron);
+
+// Native module helper (autolink exposes `globalThis.ElectronNative`)
+const example = ExpoElectron.requireNativeModule('example-native-module');
+if (example) {
+  console.log(example.hello());
+}
+
+// Example call
+await desktop.openExternal('https://expo.dev');
+```
+
+Available helpers:
+
+- `getElectronBridge()`
+- `isElectron()`
+- `requireNativeModule(name)`
+- `createDesktopApi(electron?)`
+
 Deterministic packaging details
 
 - Web export: uses the installed Expo CLI's `export` command; if `export` is not available it fails loudly rather than guessing alternatives.
