@@ -4,7 +4,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
-const { readExpoProtocols, setupLinuxTempDesktopProtocolHandlers } = require('./lib/deeplinks');
+const { readExpoProtocols, setupLinuxTempDesktopProtocolHandlers } = require('./lib/linux-dev-deeplinks');
 
 async function bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot }) {
     // Allow disabling bundling for debugging/workarounds.
