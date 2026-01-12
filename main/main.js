@@ -3,60 +3,13 @@ const path = require('path');
 const fs = require('fs');
 
 const { createDeepLinkBridge } = require('./deeplinks');
+const { installCspHeaders } = require('./csp');
 
 let mainWindow;
 const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const PROD_INDEX = path.join(__dirname, '..', 'app', 'index.html');
 
 const deepLinks = createDeepLinkBridge({ app });
-
-const DEFAULT_CSP_PROD = [
-    "default-src 'self'",
-    "base-uri 'self'",
-    "object-src 'none'",
-    "frame-ancestors 'none'",
-    "form-action 'self'",
-    "img-src 'self' data: blob:",
-    "font-src 'self' data:",
-    "style-src 'self' 'unsafe-inline'",
-    // Script inline is disabled by default; if your exported HTML needs it,
-    // set EXPO_ELECTRON_CSP to override.
-    "script-src 'self'",
-    "connect-src 'self' https: wss:",
-].join('; ');
-
-const DEFAULT_CSP_DEV = [
-    // Dev server + HMR need localhost + websockets and often eval.
-    "default-src 'self' http://localhost:* ws://localhost:*",
-    "base-uri 'self'",
-    "object-src 'none'",
-    "frame-ancestors 'none'",
-    "img-src 'self' data: blob:",
-    "font-src 'self' data:",
-    "style-src 'self' 'unsafe-inline'",
-    "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:*",
-    "connect-src 'self' http://localhost:* ws://localhost:* https: wss:",
-].join('; ');
-
-function installCspHeaders() {
-    const disabled = ['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_NO_CSP || '').toLowerCase());
-    if (disabled) return;
-
-    const isDev = process.env.NODE_ENV === 'development';
-    const csp = process.env.EXPO_ELECTRON_CSP || (isDev ? DEFAULT_CSP_DEV : DEFAULT_CSP_PROD);
-    if (!csp) return;
-
-    try {
-        session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-            const responseHeaders = details.responseHeaders || {};
-            const existingKey = Object.keys(responseHeaders).find((k) => k.toLowerCase() === 'content-security-policy');
-            responseHeaders[existingKey || 'Content-Security-Policy'] = [csp];
-            callback({ responseHeaders });
-        });
-    } catch (e) {
-        console.warn('Failed to install CSP headers:', e && e.message);
-    }
-}
 
 function createWindow() {
     const preloadPath = process.env.EXPO_PRELOAD_PATH ? path.resolve(process.env.EXPO_PRELOAD_PATH) : path.join(__dirname, 'preload.js');
@@ -102,7 +55,7 @@ if (isSquirrelStartup) {
 } else if (deepLinks.gotTheLock) {
     app.whenReady().then(() => {
         deepLinks.registerProtocols();
-        installCspHeaders();
+        installCspHeaders({ session });
         createWindow();
 
         if (process.env.NODE_ENV === 'development') {
