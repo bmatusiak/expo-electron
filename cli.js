@@ -320,17 +320,12 @@ function findAutolinkableModuleRoots(projectRoot) {
 }
 
 function getBuildWorkspacesForModule(modRoot) {
-    // Prefer `electron/package.json` if it defines a build script.
+    // Only consider `electron/package.json` if it defines a build script.
     const candidates = [];
     const electronPkgPath = path.join(modRoot, 'electron', 'package.json');
     const electronPkg = readJsonIfExists(electronPkgPath);
     if (electronPkg && electronPkg.scripts && typeof electronPkg.scripts.build === 'string' && electronPkg.scripts.build.trim()) {
         candidates.push(path.dirname(electronPkgPath));
-    }
-    const rootPkgPath = path.join(modRoot, 'package.json');
-    const rootPkg = readJsonIfExists(rootPkgPath);
-    if (rootPkg && rootPkg.scripts && typeof rootPkg.scripts.build === 'string' && rootPkg.scripts.build.trim()) {
-        candidates.push(path.dirname(rootPkgPath));
     }
     // Deduplicate
     return Array.from(new Set(candidates));
