@@ -252,11 +252,20 @@ function copyRecursiveFilteredSkipExisting(src, dest, filterFn) {
 
 // Check for an executable in PATH using Node APIs only (cross-platform).
 function commandExistsInPath(cmd) {
-    const PATH = process.env.PATH || '';
+    // On Windows, env var casing can be `Path` instead of `PATH`.
+    const PATH = process.env.PATH || process.env.Path || '';
     const parts = PATH.split(path.delimiter).filter(Boolean);
     if (process.platform === 'win32') {
         const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';');
+        const hasExt = Boolean(path.extname(cmd));
         for (const dir of parts) {
+            // If caller already provided an extension (e.g. `npm.cmd`), check it directly.
+            if (hasExt) {
+                const candidate = path.join(dir, cmd);
+                try { if (fs.existsSync(candidate)) return true; } catch (e) { }
+                continue;
+            }
+
             for (const ext of pathext) {
                 const candidate = path.join(dir, cmd + ext);
                 try { if (fs.existsSync(candidate)) return true; } catch (e) { }
