@@ -22,6 +22,7 @@ function createWindow() {
         height: 960,
         webPreferences: {
             preload: preloadPath,
+            webviewTag: true,
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: false
