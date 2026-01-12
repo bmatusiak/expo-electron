@@ -18,6 +18,29 @@ function _sanitizeOpenExternalUrl(url) {
     return null;
 }
 
+function _sanitizeSaveDialogOptions(options) {
+    if (!options || typeof options !== 'object') return {};
+    /** @type {any} */
+    const out = {};
+
+    if (typeof options.title === 'string' && options.title.trim()) out.title = options.title;
+    if (typeof options.buttonLabel === 'string' && options.buttonLabel.trim()) out.buttonLabel = options.buttonLabel;
+
+    // `defaultPath` must be a string if provided. Passing undefined/null across IPC
+    // can cause Electron to reject the options object on some platforms.
+    if (typeof options.defaultPath === 'string' && options.defaultPath.trim()) out.defaultPath = options.defaultPath;
+
+    if (typeof options.nameFieldLabel === 'string' && options.nameFieldLabel.trim()) out.nameFieldLabel = options.nameFieldLabel;
+    if (typeof options.message === 'string' && options.message.trim()) out.message = options.message;
+    if (typeof options.filters === 'object' && Array.isArray(options.filters)) out.filters = options.filters;
+
+    // Common boolean flags
+    if (typeof options.showsTagField === 'boolean') out.showsTagField = options.showsTagField;
+    if (typeof options.showOverwriteConfirmation === 'boolean') out.showOverwriteConfirmation = options.showOverwriteConfirmation;
+
+    return out;
+}
+
 function createDesktopBridge({ app, ipcMain, nativeTheme, clipboard, dialog, shell, powerMonitor }) {
     let mainWindow = null;
 
@@ -66,7 +89,10 @@ function createDesktopBridge({ app, ipcMain, nativeTheme, clipboard, dialog, she
 
         ipcMain.handle('dialog:save', async (event, options) => {
             try {
-                const res = await dialog.showSaveDialog(mainWindow || null, options || {});
+                const safeOptions = _sanitizeSaveDialogOptions(options);
+                const res = mainWindow
+                    ? await dialog.showSaveDialog(mainWindow, safeOptions)
+                    : await dialog.showSaveDialog(safeOptions);
                 return res;
             } catch (e) {
                 return { canceled: true, filePath: undefined, error: e && e.message };
