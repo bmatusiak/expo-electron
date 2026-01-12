@@ -2,9 +2,13 @@ const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+const { createDeepLinkBridge } = require('./deeplinks');
+
 let mainWindow;
 const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const PROD_INDEX = path.join(__dirname, '..', 'app', 'index.html');
+
+const deepLinks = createDeepLinkBridge({ app });
 
 const DEFAULT_CSP_PROD = [
     "default-src 'self'",
@@ -66,6 +70,7 @@ function createWindow() {
             sandbox: false
         },
     });
+    deepLinks.setMainWindow(mainWindow);
 
     // Determine whether a production index exists in the packaged app.
     // If the production index is present we prefer it (packaged apps should
@@ -94,8 +99,9 @@ function createWindow() {
 let isSquirrelStartup = !!require('electron-squirrel-startup');
 if (isSquirrelStartup) {
     app.quit();
-} else {
+} else if (deepLinks.gotTheLock) {
     app.whenReady().then(() => {
+        deepLinks.registerProtocols();
         installCspHeaders();
         createWindow();
 

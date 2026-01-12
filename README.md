@@ -43,8 +43,16 @@ Environment variables
 - `EXPO_ELECTRON_NO_BUNDLE_PRELOAD` — disable `esbuild` bundling of `main/preload.js` (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_NO_CSP` — disable CSP injection (export-time meta tag) and runtime CSP header install (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_CSP` — override the Content Security Policy string.
+- `EXPO_ELECTRON_PROTOCOLS` (or `EXPO_ELECTRON_PROTOCOL`) — comma-separated list of URL schemes to register (example: `myapp,myapp-dev`).
+- `EXPO_ELECTRON_NO_SINGLE_INSTANCE` — disable single-instance behavior (Windows/Linux deep linking relies on single-instance handoff).
 - `EXPO_ELECTRON_COPY_NATIVE_ONLY` — copy only `*.node` files from all autolink resources (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_NO_EXTRA_RESOURCE_NATIVE` — do not ship `native/` as a Forge `extraResource` (set to `1`/`true`/`yes`).
+
+Deep linking (URL schemes)
+
+- Main process: `main/main.js` registers protocols (via `app.setAsDefaultProtocolClient`), captures incoming URLs (`open-url` on macOS, `second-instance` argv on Windows/Linux), and forwards them to the renderer with IPC channel `on-deep-link`.
+- Preload: the autolinker generates a `window.electron.onDeepLink((url) => ...)` helper that strips the Electron IPC event object and only passes the URL string.
+- Configuration: `expo.scheme` (or `expo.schemes`) from `app.json` is used when available; packaged builds also embed the configured scheme(s) into the generated packaging workspace `package.json` under `expoElectron.protocols`.
 
 Deterministic packaging details
 

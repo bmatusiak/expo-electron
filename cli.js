@@ -301,10 +301,31 @@ function spawnExpoWeb() {
 function spawnElectron(cwd, resolvedUrl) {
     console.log('Launching Electron in', cwd);
     const preloadPath = path.join(cwd, 'main', 'preload.js');
+
+    function readExpoProtocols(projectRoot) {
+        try {
+            const appJson = path.join(projectRoot, 'app.json');
+            if (!fs.existsSync(appJson)) return [];
+            const cfg = JSON.parse(fs.readFileSync(appJson, 'utf8'));
+            const expo = (cfg || {}).expo || {};
+            if (typeof expo.scheme === 'string' && expo.scheme.trim()) return [expo.scheme.trim()];
+            if (Array.isArray(expo.schemes)) return expo.schemes;
+            return [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    const protocols = readExpoProtocols(PROJECT_ROOT)
+        .map((s) => String(s || '').trim())
+        .filter(Boolean);
+
     const env = Object.assign({}, process.env, {
         EXPO_WEB_URL: resolvedUrl || DEV_URL,
         EXPO_PRELOAD_PATH: preloadPath,
         NODE_ENV: 'development',
+        // Used by main/main.js to register scheme handlers and to filter argv.
+        EXPO_ELECTRON_PROTOCOLS: protocols.length ? protocols.join(',') : process.env.EXPO_ELECTRON_PROTOCOLS,
     });
     const electronEntry = path.join(cwd, 'main', 'main.js');
     if (!fs.existsSync(ELECTRON_CMD)) {
@@ -747,6 +768,19 @@ async function pack(makeMakers) {
             if (fs.existsSync(projectPkgPath)) projectPkg = JSON.parse(fs.readFileSync(projectPkgPath, 'utf8'));
         } catch (e) { /* ignore */ }
 
+        // Read Expo scheme(s) for deep-linking registration.
+        let expoProtocols = [];
+        try {
+            const appJson = path.join(PROJECT_ROOT, 'app.json');
+            if (fs.existsSync(appJson)) {
+                const cfg = JSON.parse(fs.readFileSync(appJson, 'utf8'));
+                const expo = (cfg || {}).expo || {};
+                if (typeof expo.scheme === 'string' && expo.scheme.trim()) expoProtocols = [expo.scheme.trim()];
+                else if (Array.isArray(expo.schemes)) expoProtocols = expo.schemes;
+            }
+        } catch (e) { /* ignore */ }
+        expoProtocols = (expoProtocols || []).map((s) => String(s || '').trim()).filter(Boolean);
+
         // Build a minimal, deterministic workspace package.json using project values
         const workPkg = {
             name: projectPkg.name ? `${projectPkg.name}-electron` : 'expo-electron-workspace',
@@ -758,6 +792,10 @@ async function pack(makeMakers) {
             main: 'main/main.js',
             devDependencies: projectPkg.devDependencies || { "electron": "*" },
         };
+        if (expoProtocols.length > 0) {
+            // Read by main/main.js in production via app.getAppPath()/package.json.
+            workPkg.expoElectron = { protocols: expoProtocols };
+        }
         // Inject a sensible default Forge config so `electron-forge make` has
         // makers and packager settings to run deterministically.
         const defaultForgeConfig = {
