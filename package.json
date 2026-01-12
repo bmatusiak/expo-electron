@@ -1,6 +1,7 @@
 {
   "name": "expo-electron",
   "version": "0.0.1",
+  "main": "./index.js",
   "bin": {
     "expo-electron": "./cli.js"
   },
