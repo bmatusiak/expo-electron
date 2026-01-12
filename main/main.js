@@ -80,15 +80,6 @@ if (isSquirrelStartup) {
     });
 }
 
-ipcMain.handle('restart-main', async () => {
-    try {
-        app.relaunch();
-        app.exit(0);
-    } catch (e) {
-        console.error('failed to relaunch', e);
-    }
-});
-
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });

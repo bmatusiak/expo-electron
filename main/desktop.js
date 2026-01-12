@@ -146,6 +146,17 @@ function createDesktopBridge({ app, ipcMain, nativeTheme, clipboard, dialog, she
                 return null;
             }
         });
+
+        // Relaunch (useful for quick dev refresh flows)
+        ipcMain.handle('app:relaunch', async () => {
+            try {
+                app.relaunch();
+                app.exit(0);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        });
     }
 
     return {
