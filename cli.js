@@ -904,37 +904,47 @@ async function pack(makeMakers) {
         } catch (e) { /* ignore */ }
         expoProtocols = (expoProtocols || []).map((s) => String(s || '').trim()).filter(Boolean);
 
-        // Build a minimal, deterministic workspace package.json using project values.
-        // Ensure Electron is present in devDependencies so electron-forge can
-        // detect the Electron version.
-        // IMPORTANT: Prefer the root project's declared version. If not declared,
-        // fall back to the version installed in the root project's node_modules.
-        const readInstalledElectronVersion = () => {
-            try {
-                const p = path.join(PROJECT_ROOT, 'node_modules', 'electron', 'package.json');
-                if (!fs.existsSync(p)) return null;
-                const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-                return (pkg && pkg.version) ? String(pkg.version) : null;
-            } catch (e) {
-                return null;
-            }
-        };
-        const inferredElectronVersion =
+        // Build a minimal, deterministic workspace package.json using ONLY root project values.
+        // No implicit defaults: if required fields are missing, fail loudly.
+        const rootName = typeof projectPkg.name === 'string' ? projectPkg.name.trim() : '';
+        const rootVersion = typeof projectPkg.version === 'string' ? projectPkg.version.trim() : '';
+        const rootDescription = typeof projectPkg.description === 'string' ? projectPkg.description.trim() : '';
+        const rootAuthor = projectPkg.author;
+        if (!rootName) {
+            console.error('Packaging: root package.json is missing required field "name" at', projectPkgPath);
+            process.exit(5);
+        }
+        if (!rootVersion) {
+            console.error('Packaging: root package.json is missing required field "version" at', projectPkgPath);
+            process.exit(5);
+        }
+        if (!rootDescription) {
+            console.error('Packaging: root package.json is missing required field "description" at', projectPkgPath);
+            process.exit(5);
+        }
+        if (!rootAuthor) {
+            console.error('Packaging: root package.json is missing required field "author" at', projectPkgPath);
+            process.exit(5);
+        }
+        const electronFromRoot =
             ((projectPkg.devDependencies || {}).electron) ||
-            ((projectPkg.dependencies || {}).electron) ||
-            readInstalledElectronVersion() ||
-            '*';
+            ((projectPkg.dependencies || {}).electron);
+        if (!electronFromRoot) {
+            console.error('Packaging: root package.json must declare "electron" in dependencies or devDependencies at', projectPkgPath);
+            console.error('Example: add to devDependencies: { "electron": "39.2.7" }');
+            process.exit(5);
+        }
 
         const workspaceDevDependencies = {
             ...(projectPkg.devDependencies || {}),
+            electron: electronFromRoot,
         };
-        if (!workspaceDevDependencies.electron) workspaceDevDependencies.electron = inferredElectronVersion;
 
         const workPkg = {
-            name: projectPkg.name ? `${projectPkg.name}-electron` : 'expo-electron-workspace',
-            version: projectPkg.version || '1.0.0',
-            description: projectPkg.description || projectPkg.productName || projectPkg.name || 'Expo Electron App',
-            author: projectPkg.author,
+            name: rootName,
+            version: rootVersion,
+            description: rootDescription,
+            author: rootAuthor,
             // Always point at main/main.js. When bundling is enabled, this file
             // is overwritten with the bundled output.
             main: 'main/main.js',
