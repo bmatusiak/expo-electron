@@ -598,8 +598,8 @@ function prebuild() {
     try {
         const gi = path.join(target, '.gitignore');
         if (!fs.existsSync(gi)) {
-            // Exclude build output and the generated preload entry
-            fs.writeFileSync(gi, 'build\nmain/preload.js\n');
+            // Exclude build output, the generated preload entry, and autolink resources
+            fs.writeFileSync(gi, 'build\nmain/preload.js\nelectron-resources.json\n');
             console.log('Prebuild: wrote', gi);
         } else {
             console.log('Prebuild: .gitignore already exists; leaving in place');
