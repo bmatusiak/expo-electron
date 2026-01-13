@@ -905,6 +905,19 @@ async function pack(makeMakers) {
         expoProtocols = (expoProtocols || []).map((s) => String(s || '').trim()).filter(Boolean);
 
         // Build a minimal, deterministic workspace package.json using project values
+        // Ensure Electron is present in devDependencies so electron-forge can
+        // detect the Electron version.
+        let expoElectronPkg = {};
+        try {
+            const selfPkgPath = path.join(__dirname, 'package.json');
+            if (fs.existsSync(selfPkgPath)) expoElectronPkg = JSON.parse(fs.readFileSync(selfPkgPath, 'utf8'));
+        } catch (e) { /* ignore */ }
+        const inferredElectronVersion = (((expoElectronPkg || {}).dependencies || {}).electron) || '*';
+        const workspaceDevDependencies = {
+            ...(projectPkg.devDependencies || {}),
+        };
+        if (!workspaceDevDependencies.electron) workspaceDevDependencies.electron = inferredElectronVersion;
+
         const workPkg = {
             name: projectPkg.name ? `${projectPkg.name}-electron` : 'expo-electron-workspace',
             version: projectPkg.version || '1.0.0',
@@ -913,7 +926,7 @@ async function pack(makeMakers) {
             // Always point at main/main.js. When bundling is enabled, this file
             // is overwritten with the bundled output.
             main: 'main/main.js',
-            devDependencies: projectPkg.devDependencies || { "electron": "*" },
+            devDependencies: workspaceDevDependencies,
         };
         if (expoProtocols.length > 0) {
             // Read by main/main.js in production via app.getAppPath()/package.json.
