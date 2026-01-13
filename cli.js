@@ -904,15 +904,27 @@ async function pack(makeMakers) {
         } catch (e) { /* ignore */ }
         expoProtocols = (expoProtocols || []).map((s) => String(s || '').trim()).filter(Boolean);
 
-        // Build a minimal, deterministic workspace package.json using project values
+        // Build a minimal, deterministic workspace package.json using project values.
         // Ensure Electron is present in devDependencies so electron-forge can
         // detect the Electron version.
-        let expoElectronPkg = {};
-        try {
-            const selfPkgPath = path.join(__dirname, 'package.json');
-            if (fs.existsSync(selfPkgPath)) expoElectronPkg = JSON.parse(fs.readFileSync(selfPkgPath, 'utf8'));
-        } catch (e) { /* ignore */ }
-        const inferredElectronVersion = (((expoElectronPkg || {}).dependencies || {}).electron) || '*';
+        // IMPORTANT: Prefer the root project's declared version. If not declared,
+        // fall back to the version installed in the root project's node_modules.
+        const readInstalledElectronVersion = () => {
+            try {
+                const p = path.join(PROJECT_ROOT, 'node_modules', 'electron', 'package.json');
+                if (!fs.existsSync(p)) return null;
+                const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+                return (pkg && pkg.version) ? String(pkg.version) : null;
+            } catch (e) {
+                return null;
+            }
+        };
+        const inferredElectronVersion =
+            ((projectPkg.devDependencies || {}).electron) ||
+            ((projectPkg.dependencies || {}).electron) ||
+            readInstalledElectronVersion() ||
+            '*';
+
         const workspaceDevDependencies = {
             ...(projectPkg.devDependencies || {}),
         };
