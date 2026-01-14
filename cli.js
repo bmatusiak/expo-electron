@@ -3,6 +3,7 @@ const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const readline = require('readline');
 
 // Node 24+ prints a DeprecationWarning when spawning with `shell: true` and args.
 // This CLI intentionally uses shell execution on Windows for `.cmd` shims in
@@ -323,6 +324,58 @@ function truncateTail(str, maxChars) {
     return s.slice(s.length - maxChars);
 }
 
+function createSpinner({ text = 'building…', stream = process.stdout, startTimeMs = Date.now() } = {}) {
+    const enabled = Boolean(stream && stream.isTTY);
+    const frames = ['-', '\\', '|', '/'];
+    let frameIndex = 0;
+    let lastTick = 0;
+    let started = false;
+    let lastRenderLen = 0;
+
+    function frame() {
+        const elapsedS = ((Date.now() - startTimeMs) / 1000).toFixed(1);
+        return `${frames[frameIndex]} ${text} ${elapsedS}s`;
+    }
+
+    function render() {
+        if (!enabled) return;
+        const s = frame();
+        // Clear previous render (if any), then redraw in-place.
+        readline.clearLine(stream, 0);
+        readline.cursorTo(stream, 0);
+        stream.write(s);
+        lastRenderLen = s.length;
+        started = true;
+    }
+
+    function tick() {
+        if (!enabled) return;
+        const now = Date.now();
+        // Throttle a bit so fast output doesn't spam terminal updates.
+        if (now - lastTick < 60) return;
+        lastTick = now;
+        frameIndex = (frameIndex + 1) % frames.length;
+        render();
+    }
+
+    function stop() {
+        if (!enabled) return;
+        if (!started) return;
+        // Clear spinner line.
+        readline.clearLine(stream, 0);
+        readline.cursorTo(stream, 0);
+        // Avoid leaving the cursor at column 0 with no newline when
+        // subsequent console.log happens.
+        stream.write(' '.repeat(Math.min(lastRenderLen, 200)));
+        readline.clearLine(stream, 0);
+        readline.cursorTo(stream, 0);
+        started = false;
+        lastRenderLen = 0;
+    }
+
+    return { tick, stop, render };
+}
+
 function runCommandCaptured(cmdPath, args, options = {}) {
     return new Promise((resolve, reject) => {
         const maxOutputChars = typeof options.maxOutputChars === 'number' ? options.maxOutputChars : 160_000;
@@ -340,14 +393,21 @@ function runCommandCaptured(cmdPath, args, options = {}) {
         const p = spawn(cmdPath, args, spawnOptions);
         let combined = '';
 
+        const spinner = options.spinnerText
+            ? createSpinner({ text: options.spinnerText, stream: process.stdout, startTimeMs: Date.now() })
+            : null;
+        if (spinner) spinner.render();
+
         const onData = (buf) => {
             combined = truncateTail(combined + String(buf || ''), maxOutputChars);
+            if (spinner) spinner.tick();
         };
         if (p.stdout) p.stdout.on('data', onData);
         if (p.stderr) p.stderr.on('data', onData);
 
         p.on('error', (err) => reject(err));
         p.on('close', (code, signal) => {
+            if (spinner) spinner.stop();
             if (code === 0) return resolve({ code: 0, output: combined });
             const msg = signal
                 ? `${label} failed (signal ${signal})`
@@ -494,7 +554,11 @@ async function buildElectronNativeModules(projectRoot) {
                 console.log(colorize('dim', `Running: ${NPM_CMD} run build`));
                 await runCommand(NPM_CMD, ['run', 'build'], { cwd: t.cwd });
             } else {
-                await runCommandCaptured(NPM_CMD, ['run', 'build'], { cwd: t.cwd, label: `${t.name}: npm run build` });
+                await runCommandCaptured(NPM_CMD, ['run', 'build'], {
+                    cwd: t.cwd,
+                    label: `${t.name}: npm run build`,
+                    spinnerText: `building ${t.name}`
+                });
             }
             const dur = ((Date.now() - startMs) / 1000).toFixed(1);
             console.log(colorize('green', 'OK'), colorize('dim', `(${dur}s)`));
