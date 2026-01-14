@@ -132,6 +132,27 @@ const DEV_URL = process.env.EXPO_WEB_URL || 'http://localhost:8081';
 const POLL_INTERVAL = 500;
 const TIMEOUT_MS = 120000;
 
+function getExpoSpawnInfo() {
+    // On Windows, spawning `expo.cmd` uses a shell wrapper which can make
+    // signal propagation and process-tree cleanup unreliable. Prefer running
+    // Expo via Node directly when possible.
+    const expoNodeCli = path.join(PROJECT_ROOT, 'node_modules', 'expo', 'bin', 'cli');
+    if (process.platform === 'win32' && fs.existsSync(expoNodeCli)) {
+        return {
+            cmd: process.execPath,
+            argsPrefix: [expoNodeCli],
+            shell: false,
+            display: `${process.execPath} ${expoNodeCli}`,
+        };
+    }
+    return {
+        cmd: EXPO_CMD,
+        argsPrefix: [],
+        shell: process.platform === 'win32' ? true : false,
+        display: EXPO_CMD,
+    };
+}
+
 function parseMakeArg() {
     const argv = process.argv.slice(2);
     for (let i = 0; i < argv.length; i++) {
@@ -622,15 +643,15 @@ function spawnExpoWeb() {
     delete env.CI;
     env.BROWSER = 'none';
 
-    if (!fs.existsSync(EXPO_CMD)) {
+    const expo = getExpoSpawnInfo();
+    if (!fs.existsSync(expo.cmd)) {
         console.error('Missing expo binary. Run `npm install` at project root:', PROJECT_ROOT);
         process.exit(2);
     }
-    console.log('Starting Expo (web) via', EXPO_CMD, 'start --web');
+    console.log('Starting Expo (web) via', expo.display, 'start --web');
     /** @type {import('child_process').SpawnOptions} */
-    const expoSpawnOpts = { stdio: 'inherit', env, cwd: PROJECT_ROOT };
-    if (expoSpawnOpts.shell === undefined && process.platform === 'win32') expoSpawnOpts.shell = true;
-    const child = spawn(EXPO_CMD, ['start', '--web'], expoSpawnOpts);
+    const expoSpawnOpts = { stdio: 'inherit', env, cwd: PROJECT_ROOT, shell: expo.shell };
+    const child = spawn(expo.cmd, [...expo.argsPrefix, 'start', '--web'], expoSpawnOpts);
     child.on('error', (err) => console.error('Expo process error:', err && err.message));
     return child;
 }
@@ -727,7 +748,7 @@ async function start() {
         process.exit(typeof code === 'number' ? code : 0);
     }
 
-    function sendSigint(p) {
+    function sendSigint(p, opts = {}) {
         if (!p || !p.pid) return;
         try {
             if (process.platform === 'win32') {
@@ -742,12 +763,15 @@ async function start() {
                     console.warn('taskkill /PID threw:', e && e.message);
                 }
 
-                // Backup: kill any remaining Electron processes.
-                try {
-                    const r2 = spawnSync('taskkill', ['/IM', 'electron.exe', '/T', '/F'], { windowsHide: true });
-                    if (r2.error) console.warn('taskkill /IM electron.exe failed:', r2.error && r2.error.message);
-                } catch (e) {
-                    console.warn('taskkill /IM threw:', e && e.message);
+                // Backup: kill any remaining Electron processes (ONLY when we're
+                // explicitly trying to stop Electron, not when stopping Expo).
+                if (opts && opts.kind === 'electron') {
+                    try {
+                        const r2 = spawnSync('taskkill', ['/IM', 'electron.exe', '/T', '/F'], { windowsHide: true });
+                        if (r2.error) console.warn('taskkill /IM electron.exe failed:', r2.error && r2.error.message);
+                    } catch (e) {
+                        console.warn('taskkill /IM threw:', e && e.message);
+                    }
                 }
             } else {
                 p.kill('SIGINT');
@@ -758,8 +782,8 @@ async function start() {
     function initiateShutdown(code) {
         if (isShuttingDown) return;
         isShuttingDown = true;
-        sendSigint(expoProc);
-        sendSigint(electronProc);
+        sendSigint(expoProc, { kind: 'expo' });
+        sendSigint(electronProc, { kind: 'electron' });
         if (bothGone()) return finalizeExit(code);
         // fall through and wait for exit events or liveness poll
     }
@@ -767,14 +791,14 @@ async function start() {
     // Handle expo exit: if electron still running, signal it; finalize when both gone
     expoProc.on('exit', (code) => {
         console.log('Expo exited', code);
-        if (!isShuttingDown) sendSigint(electronProc);
+        if (!isShuttingDown) initiateShutdown(code);
         if (bothGone()) finalizeExit(code);
     });
 
     // Handle electron exit: if expo still running, signal it; finalize when both gone
     electronProc.on('exit', (code) => {
         console.log('Electron exited', code);
-        if (!isShuttingDown) sendSigint(expoProc);
+        if (!isShuttingDown) initiateShutdown(code);
         if (bothGone()) finalizeExit(code);
     });
 
