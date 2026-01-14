@@ -7,6 +7,10 @@ Quick commands (run from the project root):
 - `npm install` — ensure project dependencies are installed so `expo`, `electron`, and `electron-forge` are available in `node_modules/.bin`.
 - `npx expo-electron prebuild` — create/update `electron/` from the bundled template (never overwrites existing files).
 - `npx expo-electron autolink` — generate `electron/main/preload.js` and `electron/electron-resources.json`.
+- `npx expo-electron build` — build all Electron-native module workspaces (runs `npm run build` in each module's `electron/` folder).
+  - Build a single module: `npx expo-electron build <module-name>` or `npx expo-electron build --module <module-name>`.
+  - List detected build targets without building: `npx expo-electron build --list`.
+  - Show live build logs: add `--verbose` (or set `EXPO_ELECTRON_VERBOSE=1`).
 - `npx expo-electron start` — run `expo start --web`, wait for the dev server, then launch Electron.
 - `npx expo-electron package` — export web, assemble a deterministic Forge workspace, and run `electron-forge package`.
   - Add `--make zip,deb` (etc) to also run `electron-forge make` for final distributables.
@@ -41,6 +45,7 @@ Environment variables
 - `EXPO_PRELOAD_PATH` (default: `electron/main/preload.js` when launched by `start`) — path to the preload script used at runtime (used by `main/main.js`).
 - `EXPO_ELECTRON_BUILD_DIR` (default: `build`) — folder name under `electron/` used as the packaging workspace (used by `package`).
 - `EXPO_ELECTRON_NO_NATIVE_BUILD` — skip building Electron-native modules during `start`/`package` (set to `1`/`true`/`yes`).
+- `EXPO_ELECTRON_VERBOSE` — when set to `1`/`true`/`yes`, shows live logs for native module builds (equivalent to `--verbose`).
 - `EXPO_ELECTRON_NO_BUNDLE_MAIN` — disable `esbuild` bundling of `main/main.js` (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_NO_BUNDLE_PRELOAD` — disable `esbuild` bundling of `main/preload.js` (set to `1`/`true`/`yes`).
 - `EXPO_ELECTRON_NO_CSP` — disable CSP injection (export-time meta tag) and runtime CSP header install (set to `1`/`true`/`yes`).

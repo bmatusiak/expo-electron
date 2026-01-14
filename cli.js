@@ -4,6 +4,11 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
+// Node 24+ prints a DeprecationWarning when spawning with `shell: true` and args.
+// This CLI intentionally uses shell execution on Windows for `.cmd` shims in
+// node_modules/.bin; suppressing DeprecationWarnings keeps output readable.
+process.noDeprecation = true;
+
 const { readExpoProtocols, setupLinuxTempDesktopProtocolHandlers } = require('./lib/linux-dev-deeplinks');
 
 async function bundleElectronMainIfNeeded({ entryFile, outFile, projectRoot }) {
@@ -291,6 +296,74 @@ function runCommand(cmdPath, args, options = {}) {
     });
 }
 
+function supportsAnsi() {
+    // Basic heuristic: respect NO_COLOR; avoid ANSI when not a TTY.
+    if (process.env.NO_COLOR) return false;
+    return Boolean(process.stdout && process.stdout.isTTY);
+}
+
+function colorize(kind, text) {
+    if (!supportsAnsi()) return text;
+    const reset = '\x1b[0m';
+    const codes = {
+        dim: '\x1b[2m',
+        red: '\x1b[31m',
+        green: '\x1b[32m',
+        yellow: '\x1b[33m',
+        cyan: '\x1b[36m',
+    };
+    const c = codes[kind];
+    if (!c) return text;
+    return c + text + reset;
+}
+
+function truncateTail(str, maxChars) {
+    const s = String(str || '');
+    if (s.length <= maxChars) return s;
+    return s.slice(s.length - maxChars);
+}
+
+function runCommandCaptured(cmdPath, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const maxOutputChars = typeof options.maxOutputChars === 'number' ? options.maxOutputChars : 160_000;
+        const label = options.label || cmdPath;
+        /** @type {import('child_process').SpawnOptions} */
+        const spawnOptions = {
+            cwd: options.cwd,
+            env: options.env,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        };
+        if (options.shell !== undefined) spawnOptions.shell = options.shell;
+        if (spawnOptions.shell === undefined && process.platform === 'win32') spawnOptions.shell = true;
+
+        const p = spawn(cmdPath, args, spawnOptions);
+        let combined = '';
+
+        const onData = (buf) => {
+            combined = truncateTail(combined + String(buf || ''), maxOutputChars);
+        };
+        if (p.stdout) p.stdout.on('data', onData);
+        if (p.stderr) p.stderr.on('data', onData);
+
+        p.on('error', (err) => reject(err));
+        p.on('close', (code, signal) => {
+            if (code === 0) return resolve({ code: 0, output: combined });
+            const msg = signal
+                ? `${label} failed (signal ${signal})`
+                : `${label} failed (exit ${code})`;
+            const e = new Error(msg);
+            e.code = code;
+            e.signal = signal;
+            e.cmd = cmdPath;
+            e.args = args;
+            e.cwd = spawnOptions.cwd;
+            e.output = combined;
+            reject(e);
+        });
+    });
+}
+
 function readJsonIfExists(p) {
     try {
         if (!fs.existsSync(p)) return null;
@@ -341,6 +414,9 @@ function getBuildWorkspacesForModule(modRoot) {
 }
 
 async function buildElectronNativeModules(projectRoot) {
+    const argv = process.argv.slice(2);
+    const verbose = ['1', 'true', 'yes'].includes(String(process.env.EXPO_ELECTRON_VERBOSE || '').toLowerCase()) || argv.includes('--verbose') || argv.includes('-v');
+    const listOnly = argv.includes('--list') || argv.includes('-l');
     const disabled = String(process.env.EXPO_ELECTRON_NO_NATIVE_BUILD || '').toLowerCase();
     if (disabled === '1' || disabled === 'true' || disabled === 'yes') {
         console.log('Native build: skipping (EXPO_ELECTRON_NO_NATIVE_BUILD set)');
@@ -371,10 +447,85 @@ async function buildElectronNativeModules(projectRoot) {
         return;
     }
 
-    console.log('Native build: building', buildTargets.length, 'module workspace(s)');
-    for (const t of buildTargets) {
-        console.log('Native build: npm run build in', t.cwd, `(module: ${t.name})`);
-        await runCommand(NPM_CMD, ['run', 'build'], { cwd: t.cwd });
+    // Optional filter for building a single module:
+    // - `expo-electron build <name>` passes the name in argv[1] for that subcommand
+    // - `expo-electron build --module <name>` also supported
+    let onlyModule = null;
+    const moduleFlagIdx = argv.indexOf('--module');
+    if (moduleFlagIdx !== -1 && argv[moduleFlagIdx + 1] && !argv[moduleFlagIdx + 1].startsWith('--')) {
+        onlyModule = argv[moduleFlagIdx + 1];
+    }
+    // When invoked via `expo-electron build <name>`, argv looks like: ['build', '<name>', ...]
+    if (!onlyModule && argv[0] === 'build' && argv[1] && !argv[1].startsWith('-')) {
+        onlyModule = argv[1];
+    }
+
+    const targets = onlyModule
+        ? buildTargets.filter((t) => String(t.name).toLowerCase() === String(onlyModule).toLowerCase())
+        : buildTargets;
+    if (onlyModule && targets.length === 0) {
+        const known = Array.from(new Set(buildTargets.map((t) => t.name))).sort();
+        throw new Error(`Native build: unknown module "${onlyModule}". Known: ${known.join(', ') || '(none)'}`);
+    }
+
+    if (listOnly) {
+        const uniqueMods = Array.from(new Set(targets.map((t) => t.name))).sort();
+        console.log('Native build: discovered', targets.length, 'module workspace(s)' + (onlyModule ? ` (module: ${onlyModule})` : ''));
+        for (const name of uniqueMods) {
+            console.log(colorize('cyan', name));
+            for (const t of targets.filter((x) => x.name === name)) {
+                const rel = path.relative(projectRoot, t.cwd) || t.cwd;
+                console.log('  -', rel);
+            }
+        }
+        return;
+    }
+
+    console.log('Native build: building', targets.length, 'module workspace(s)' + (onlyModule ? ` (module: ${onlyModule})` : ''));
+    for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        const rel = path.relative(projectRoot, t.cwd) || t.cwd;
+        const prefix = `[${i + 1}/${targets.length}]`;
+        const startMs = Date.now();
+        console.log(colorize('cyan', `Native build ${prefix}`), `${t.name}`, colorize('dim', `(${rel})`));
+
+        try {
+            if (verbose) {
+                console.log(colorize('dim', `Running: ${NPM_CMD} run build`));
+                await runCommand(NPM_CMD, ['run', 'build'], { cwd: t.cwd });
+            } else {
+                await runCommandCaptured(NPM_CMD, ['run', 'build'], { cwd: t.cwd, label: `${t.name}: npm run build` });
+            }
+            const dur = ((Date.now() - startMs) / 1000).toFixed(1);
+            console.log(colorize('green', 'OK'), colorize('dim', `(${dur}s)`));
+        } catch (e) {
+            const dur = ((Date.now() - startMs) / 1000).toFixed(1);
+            console.error(colorize('red', 'FAILED'), colorize('dim', `(${dur}s)`));
+            if (!verbose) {
+                const out = String(e && e.output ? e.output : '');
+                if (out.trim()) {
+                    console.error(colorize('yellow', '--- build output (captured) ---'));
+                    console.error(out.trimEnd());
+                    console.error(colorize('yellow', '--- end build output ---'));
+                } else {
+                    console.error(colorize('yellow', '(no output captured)'));
+                }
+
+                // Windows-specific hint: node-gyp often fails to unlink outputs
+                // when the .node is still loaded by a running Electron/Node process
+                // or locked by antivirus/indexers.
+                if (process.platform === 'win32') {
+                    const lower = out.toLowerCase();
+                    if (lower.includes('eperm') && lower.includes('unlink') && lower.includes('.node')) {
+                        console.error(colorize('yellow', 'Hint (Windows): a previous Electron/Node process may still be using the .node file.'));
+                        console.error(colorize('dim', 'Close the running app, then delete the module\electron\build folder and re-run.'));
+                        console.error(colorize('dim', 'If it persists, temporarily disable AV real-time scanning for the project folder.'));
+                    }
+                }
+                console.error(colorize('dim', 'Tip: re-run with --verbose or set EXPO_ELECTRON_VERBOSE=1 for live logs.'));
+            }
+            throw e;
+        }
     }
 }
 
@@ -462,7 +613,8 @@ async function start() {
         await buildElectronNativeModules(PROJECT_ROOT);
         autolink.run(PROJECT_ROOT, projectElectron);
     } catch (e) {
-        console.warn('Autolink/prebuild failed:', e && e.message);
+        console.error('Startup: prebuild/autolink failed:', e && e.message);
+        process.exit(1);
     }
 
     // Start Expo web dev server
@@ -1045,6 +1197,21 @@ if (require.main === module) {
     const cmd = process.argv[2] || 'start';
     if (cmd === 'start') start();
     else if (cmd === 'prebuild') { prebuild(); process.exit(0); }
+    else if (cmd === 'build') {
+        // Builds native electron module workspaces (per-module `npm run build`).
+        // Usage:
+        //   expo-electron build            (build all)
+        //   expo-electron build --list     (list detected targets)
+        //   expo-electron build <name>     (build one module by name)
+        //   expo-electron build --module <name>
+        //   expo-electron build --verbose
+        buildElectronNativeModules(PROJECT_ROOT)
+            .then(() => process.exit(0))
+            .catch((e) => {
+                console.error('Native build failed:', e && e.message);
+                process.exit(1);
+            });
+    }
     else if (cmd === 'package') {
         const makeMakers = parseMakeArg();
         pack(makeMakers);
